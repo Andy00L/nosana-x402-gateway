@@ -1,0 +1,23 @@
+{
+  "name": "nosana-x402-gateway",
+  "version": "0.1.0",
+  "description": "x402 payment gateway for Nosana GPU compute: POST /rent, pay USDC on Solana, get a running deployment",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@nosana/kit": "^2.7.0",
+    "hono": "^4.12.27",
+    "x402-solana": "^2.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "typescript": "^6.0.3"
+  }
+}

@@ -149,6 +149,43 @@ Two items to confirm against the installed `.d.ts` before shipping (flagged
 UNCONFIRMED by research): PayAI free-tier settlement limits, and the exact
 response header casing (`PAYMENT-RESPONSE` vs `X-PAYMENT-RESPONSE`).
 
+### Phase 0 verification results (2026-07-04, run under Bun 1.3.14 in WSL)
+
+The Phase 0 gate passed. Facts read from the installed packages and the live
+API, superseding assumptions above where they differ:
+
+- `@nosana/kit@2.7.0`, `x402-solana@2.0.4`, `hono@4.12.27` all import and run
+  under Bun. The kit entry point is `createNosanaClient(network, customConfig?)`
+  (a factory returning `NosanaClient`), not a class constructor.
+- The kit already exports `generateIdempotencyKey`, `isNosanaApiError`, and
+  `validateJobDefinition`: reuse these, do not write our own.
+- `x402-solana/types` exports `SOLANA_DEVNET_CAIP2` and `SOLANA_MAINNET_CAIP2`
+  constants plus `toCAIP2Network`: never hardcode the CAIP-2 strings.
+- `X402ServerConfig` takes the simple network format (`"solana-devnet"`),
+  `treasuryAddress`, `facilitatorUrl`, optional `apiKeyId`/`apiKeySecret`
+  (their doc comment confirms a PayAI free tier exists and keys bypass its
+  limits), optional `rpcUrl`, `defaultToken`, `defaultTimeoutSeconds`.
+- `RouteConfig` is `{ amount, asset: { address, decimals }, description?,
+  mimeType?, maxTimeoutSeconds? }` with `amount` in atomic units.
+- CRITICAL, deployment `timeout` is in MINUTES, not seconds
+  (`DeploymentCreateBody`: "Timeout in minutes, must be at least 1 minute").
+  `name` is also required, and `strategy` is a union where `"SCHEDULED"`
+  requires `schedule` and `"INFINITE"` requires a 60-minute minimum timeout.
+  The gateway converts whatever unit `POST /rent` accepts into minutes here;
+  getting this wrong is a 60x pricing error. sourceRef:
+  `@nosana/api` `dist/client/deployment-manager/schema.d.ts`.
+- Live market shape (both networks, 47 mainnet plus 4 devnet markets): the USD
+  price field is `usd_reward_per_hour`. Each market also carries
+  `network_fee_percentage` (10 on every market today), `slug` (friendly tier
+  name like `nvidia-3090`: use these for agent-facing tier names instead of
+  inventing a mapping), `address`, `name`, `type` (PREMIUM or COMMUNITY).
+- OPEN pricing question for the team or Swagger: is the renter's price
+  `usd_reward_per_hour` alone, or `usd_reward_per_hour` plus the
+  `network_fee_percentage`? The gateway must charge what Nosana debits from
+  credits, or reconciliation drifts. Resolve before Phase 1 sign-off.
+- Devnet has a cheap test market (`scenario-test-dm`, 0.01 USD/hour) suitable
+  for the sign-off loop.
+
 ---
 
 ## 4. The `POST /rent` flow, step by step
@@ -158,19 +195,24 @@ Request body (kept minimal for agents):
 ```
 POST /rent
 {
-  "market": "<market pubkey or validated tier name>",
-  "timeout": 3600,                 // seconds
+  "market": "<market slug (for example nvidia-3090) or market address>",
+  "duration_minutes": 60,          // Nosana deployment timeout is in minutes
   "job_definition": { ... }        // image MUST serve an HTTP port (see section 9)
 }
 ```
+
+The agent-facing unit is minutes to match `DeploymentCreateBody.timeout`
+exactly (one unit end to end, no conversion bug surface).
 
 Step A, no `PAYMENT-SIGNATURE` header present:
 
 1. Validate `market` against the live list from `GET /api/markets`. Reject an
    unknown market with a distinct error (never trust a client-supplied market).
-2. Compute the price server-side: `usdPerHour * (timeout / 3600)`, converted to
-   USDC atomic units (6 decimals). This is `amount`. Never read a price from the
-   request body.
+2. Compute the price server-side:
+   `usd_reward_per_hour * (duration_minutes / 60)`, plus the network fee if the
+   open pricing question resolves that way, converted to USDC atomic units
+   (6 decimals) with `toAtomicUnits`. This is `amount`. Never read a price from
+   the request body.
 3. Check the gateway credits balance covers the demand
    (`client.api.credits.balance()`). If it cannot, refuse to issue the 402 with a
    distinct "gateway capacity" error rather than taking money it cannot fulfil.
