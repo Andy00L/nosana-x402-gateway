@@ -9,6 +9,9 @@ node_modules/
 # build output
 dist/
 
+# local state (settlement database)
+data/
+
 # scratch files (per SKILL_GENERAL.md)
 .scratch/
 

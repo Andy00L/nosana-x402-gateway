@@ -21,6 +21,12 @@ const DEFAULT_FACILITATOR_URL = "https://facilitator.payai.network";
 
 const DEFAULT_PORT = 3000;
 
+// Minimum JWT secret length in characters; 32 bytes hex is 64 chars, anything
+// shorter than 32 chars is too weak to sign sessions with.
+const MIN_JWT_SECRET_LENGTH = 32;
+
+const DEFAULT_SETTLEMENT_DB_PATH = "data/gateway.db";
+
 export interface GatewayConfig {
   // Simple x402 network format expected by X402ServerConfig
   // (sourceRef: x402-solana dist X402ServerConfig.network).
@@ -29,6 +35,8 @@ export interface GatewayConfig {
   readonly treasuryAddress: string;
   readonly facilitatorUrl: string;
   readonly nosanaApiKey: string | undefined;
+  readonly jwtSecret: string;
+  readonly settlementDbPath: string;
   readonly port: number;
 }
 
@@ -54,6 +62,13 @@ export const loadGatewayConfig = (
     );
   }
 
+  const jwtSecret = environment.JWT_SECRET;
+  if (!jwtSecret || jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
+    return err(
+      `JWT_SECRET is required and must be at least ${MIN_JWT_SECRET_LENGTH} characters (generate one with: openssl rand -hex 32)`,
+    );
+  }
+
   const portRaw = environment.PORT;
   const port = portRaw === undefined ? DEFAULT_PORT : Number.parseInt(portRaw, 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -67,6 +82,8 @@ export const loadGatewayConfig = (
     treasuryAddress,
     facilitatorUrl: environment.FACILITATOR_URL ?? DEFAULT_FACILITATOR_URL,
     nosanaApiKey: environment.NOSANA_API_KEY || undefined,
+    jwtSecret,
+    settlementDbPath: environment.SETTLEMENT_DB_PATH ?? DEFAULT_SETTLEMENT_DB_PATH,
     port,
   });
 };

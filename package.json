@@ -17,6 +17,7 @@
     "x402-solana": "^2.0.4"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.14",
     "@types/node": "^26.1.0",
     "typescript": "^6.0.3"
   }

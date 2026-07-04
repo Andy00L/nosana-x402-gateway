@@ -1,5 +1,9 @@
 import { X402PaymentHandler } from "x402-solana/server";
-import type { PaymentRequirements } from "x402-solana/server";
+import type {
+  PaymentRequirements,
+  SettleResponse,
+  VerifyResponse,
+} from "x402-solana/server";
 import { getDefaultTokenAsset } from "x402-solana/utils";
 import { type Result, ok, err } from "./result.js";
 import { QUOTE_TIMEOUT_SECONDS, type GatewayConfig } from "../config.js";
@@ -38,5 +42,41 @@ export const buildPaymentRequirementsSafely = async (
     const message =
       facilitatorError instanceof Error ? facilitatorError.message : String(facilitatorError);
     return err(`facilitator unreachable while building payment requirements: ${message}`);
+  }
+};
+
+// verify and settle also reach the facilitator over the network and throw on
+// transport failure; wrapped for the same errors-as-values reason as above.
+// A thrown transport error is distinct from a rejected payment: the first is
+// our 502, the second is the agent's 402.
+export const verifyPaymentSafely = async (
+  x402Handler: X402PaymentHandler,
+  paymentHeader: string,
+  requirements: PaymentRequirements,
+): Promise<Result<VerifyResponse>> => {
+  try {
+    return ok(await x402Handler.verifyPayment(paymentHeader, requirements));
+  } catch (verifyTransportError) {
+    const message =
+      verifyTransportError instanceof Error
+        ? verifyTransportError.message
+        : String(verifyTransportError);
+    return err(`facilitator unreachable during payment verification: ${message}`);
+  }
+};
+
+export const settlePaymentSafely = async (
+  x402Handler: X402PaymentHandler,
+  paymentHeader: string,
+  requirements: PaymentRequirements,
+): Promise<Result<SettleResponse>> => {
+  try {
+    return ok(await x402Handler.settlePayment(paymentHeader, requirements));
+  } catch (settleTransportError) {
+    const message =
+      settleTransportError instanceof Error
+        ? settleTransportError.message
+        : String(settleTransportError);
+    return err(`facilitator unreachable during payment settlement: ${message}`);
   }
 };
