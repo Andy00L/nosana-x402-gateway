@@ -27,10 +27,25 @@ export interface ProvisionRequest {
   readonly paymentKey: string;
 }
 
+// Read-only view of a deployment for the lifecycle routes.
+export interface DeploymentSnapshot {
+  readonly deploymentId: string;
+  readonly status: string;
+  readonly endpoints: { opId: string; port: number | string; url: string }[];
+  readonly timeoutMinutes: number;
+  readonly marketAddress: string;
+}
+
 export interface ProvisioningService {
   readonly isConfigured: boolean;
   checkCreditsCoverQuote: (quote: RentQuote) => Promise<Result<void>>;
   provisionDeployment: (request: ProvisionRequest) => Promise<Result<ProvisionedDeployment>>;
+  getDeployment: (deploymentId: string) => Promise<Result<DeploymentSnapshot>>;
+  extendDeployment: (
+    deploymentId: string,
+    additionalMinutes: number,
+  ) => Promise<Result<DeploymentSnapshot>>;
+  stopDeployment: (deploymentId: string) => Promise<Result<DeploymentSnapshot>>;
 }
 
 const describeApiError = (unknownError: unknown): string => {
@@ -50,6 +65,9 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
       isConfigured: false,
       checkCreditsCoverQuote: async () => err(NOT_CONFIGURED_REASON),
       provisionDeployment: async () => err(NOT_CONFIGURED_REASON),
+      getDeployment: async () => err(NOT_CONFIGURED_REASON),
+      extendDeployment: async () => err(NOT_CONFIGURED_REASON),
+      stopDeployment: async () => err(NOT_CONFIGURED_REASON),
     };
   }
 
@@ -111,5 +129,70 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
     });
   };
 
-  return { isConfigured: true, checkCreditsCoverQuote, provisionDeployment };
+  const fetchDeploymentHandle = async (deploymentId: string) => {
+    return nosanaClient.api.deployments.get(deploymentId);
+  };
+
+  const mapDeploymentToSnapshot = (
+    deployment: Awaited<ReturnType<typeof fetchDeploymentHandle>>,
+  ): DeploymentSnapshot => ({
+    deploymentId: deployment.id,
+    status: deployment.status,
+    endpoints: deployment.endpoints,
+    timeoutMinutes: deployment.timeout,
+    marketAddress: deployment.market,
+  });
+
+  const getDeployment: ProvisioningService["getDeployment"] = async (deploymentId) => {
+    try {
+      return ok(mapDeploymentToSnapshot(await fetchDeploymentHandle(deploymentId)));
+    } catch (getError) {
+      return err(`deployment lookup failed: ${describeApiError(getError)}`);
+    }
+  };
+
+  const extendDeployment: ProvisioningService["extendDeployment"] = async (
+    deploymentId,
+    additionalMinutes,
+  ) => {
+    let deployment: Awaited<ReturnType<typeof fetchDeploymentHandle>>;
+    try {
+      deployment = await fetchDeploymentHandle(deploymentId);
+    } catch (getError) {
+      return err(`deployment lookup failed: ${describeApiError(getError)}`);
+    }
+    try {
+      // updateTimeout sets the TOTAL timeout in minutes, so extending means
+      // current timeout plus the paid extension (sourceRef: @nosana/api
+      // ApiDeployment.updateTimeout and DeploymentCreateBody.timeout).
+      await deployment.updateTimeout(deployment.timeout + additionalMinutes);
+    } catch (updateError) {
+      return err(`deployment extend failed: ${describeApiError(updateError)}`);
+    }
+    return getDeployment(deploymentId);
+  };
+
+  const stopDeployment: ProvisioningService["stopDeployment"] = async (deploymentId) => {
+    let deployment: Awaited<ReturnType<typeof fetchDeploymentHandle>>;
+    try {
+      deployment = await fetchDeploymentHandle(deploymentId);
+    } catch (getError) {
+      return err(`deployment lookup failed: ${describeApiError(getError)}`);
+    }
+    try {
+      await deployment.stop();
+    } catch (stopError) {
+      return err(`deployment stop failed: ${describeApiError(stopError)}`);
+    }
+    return getDeployment(deploymentId);
+  };
+
+  return {
+    isConfigured: true,
+    checkCreditsCoverQuote,
+    provisionDeployment,
+    getDeployment,
+    extendDeployment,
+    stopDeployment,
+  };
 };
