@@ -1,0 +1,16 @@
+# dependencies
+node_modules/
+
+# secrets (never staged)
+.env
+.env.*
+!.env.example
+
+# build output
+dist/
+
+# scratch files (per SKILL_GENERAL.md)
+.scratch/
+
+# logs
+*.log
