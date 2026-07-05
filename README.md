@@ -164,7 +164,9 @@ curl -s -w "\nHTTP %{http_code}\n" -X POST localhost:3000/rent \
 Success looks like: the first call returns the live market list, the second
 returns `HTTP 402` with a body starting `{"x402Version":2` and an `amount`
 matching the market's hourly rate. `bun run typecheck` exits 0 on a clean
-clone. Every command above was executed against this revision.
+clone, and `bun test` runs 36 unit tests across pricing, sessions, the
+settlement store, markets, and config. Every command above was executed
+against this revision.
 
 ## What is real and what is not
 
@@ -202,8 +204,8 @@ src/
   lib/         pricing, markets, x402 wrappers, payment gauntlet,
                settlement store, sessions, provisioning
   routes/      rent (quote, pay, lifecycle) and markets discovery
+  *.test.ts    unit tests colocated with the modules they cover
 scripts/       agent-demo.ts, the mock x402 agent for the sign-off run
-docs/          execution plan and reviewed handoff notes
 .env.example   every environment variable, documented
 ```
 

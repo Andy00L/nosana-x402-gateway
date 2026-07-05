@@ -15,5 +15,10 @@ data/
 # scratch files (per SKILL_GENERAL.md)
 .scratch/
 
+# internal strategy and planning docs stay local, not in the public repo.
+# Published sign-off evidence under docs/evidence/ is the exception.
+docs/*
+!docs/evidence/
+
 # logs
 *.log
