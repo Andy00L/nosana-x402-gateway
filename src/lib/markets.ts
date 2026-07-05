@@ -1,4 +1,3 @@
-import type { NosanaClient } from "@nosana/kit";
 import { type Result, ok, err } from "./result.js";
 
 // Short cache so one burst of agent traffic does not hammer the markets API.
@@ -53,7 +52,17 @@ export interface MarketsService {
   resolveMarket: (slugOrAddress: string) => Promise<Result<GatewayMarket>>;
 }
 
-export const createMarketsService = (nosanaClient: NosanaClient): MarketsService => {
+// Narrow structural dependency: the service reads only api.markets.list, so
+// tests inject a stub and the real NosanaClient satisfies it structurally.
+export interface MarketsApiSource {
+  readonly api: {
+    readonly markets: {
+      list: () => Promise<Record<string, unknown>[]>;
+    };
+  };
+}
+
+export const createMarketsService = (nosanaClient: MarketsApiSource): MarketsService => {
   let marketsCache: { fetchedAtMs: number; markets: GatewayMarket[] } | null = null;
 
   const listMarkets = async (): Promise<Result<GatewayMarket[]>> => {

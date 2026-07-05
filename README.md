@@ -193,21 +193,6 @@ clone. Every command above was executed against this revision.
   payments straight into Nosana's credit ledger is the upstream goal and
   needs their backend.
 
-## Prior art and related work
-
-- **[@nosana/kit](https://github.com/nosana-ci/nosana-kit)**: Nosana's own
-  SDK already lets an agent rent on chain by holding NOS and speaking Solana;
-  this gateway adds the USDC-over-HTTP door and builds on the kit rather than
-  replacing it.
-- **[x402-solana](https://github.com/PayAINetwork/x402-solana)**: the payment
-  library this gateway uses server-side; it handles the x402 v2 wire format
-  and facilitator calls, not compute.
-- **[The-Solana-Sentinel](https://github.com/iamaanahmad/The-Solana-Sentinel)**:
-  the only public repo tagged both `nosana` and `x402` before this one; a
-  token risk-analysis agent, not a GPU rental gateway.
-- **[x402 specification](https://github.com/coinbase/x402)**: the protocol
-  itself, v2.
-
 ## Repository layout
 
 ```
