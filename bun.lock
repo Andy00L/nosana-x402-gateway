@@ -6,6 +6,7 @@
       "name": "nosana-x402-gateway",
       "dependencies": {
         "@nosana/kit": "^2.7.0",
+        "bs58": "^6.0.0",
         "hono": "^4.12.27",
         "x402-solana": "^2.0.4",
       },

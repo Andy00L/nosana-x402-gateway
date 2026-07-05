@@ -8,11 +8,13 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
+    "demo:agent": "bun run scripts/agent-demo.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
   "dependencies": {
     "@nosana/kit": "^2.7.0",
+    "bs58": "^6.0.0",
     "hono": "^4.12.27",
     "x402-solana": "^2.0.4"
   },

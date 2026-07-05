@@ -217,6 +217,7 @@ src/
   lib/         pricing, markets, x402 wrappers, payment gauntlet,
                settlement store, sessions, provisioning
   routes/      rent (quote, pay, lifecycle) and markets discovery
+scripts/       agent-demo.ts, the mock x402 agent for the sign-off run
 docs/          execution plan and reviewed handoff notes
 .env.example   every environment variable, documented
 ```
