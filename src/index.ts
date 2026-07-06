@@ -6,6 +6,9 @@ import { createMarketsService } from "./lib/markets.js";
 import { buildX402Handler } from "./lib/x402.js";
 import { createSettlementStore } from "./lib/settlementStore.js";
 import { createProvisioningService } from "./lib/provisioning.js";
+import { createAvailabilityService, type MarketQueueSource } from "./lib/availability.js";
+import { ok, err } from "./lib/result.js";
+import { withTimeout } from "./lib/withTimeout.js";
 import { createRentRouter } from "./routes/rent.js";
 import { createMarketsRouter } from "./routes/markets.js";
 import { createAdminRouter } from "./routes/admin.js";
@@ -20,6 +23,41 @@ const config = configResult.value;
 
 const nosanaClient = createNosanaClient(config.nosanaNetwork);
 const marketsService = createMarketsService(nosanaClient);
+
+// On-chain market-queue read budget in milliseconds. Shorter than the 60s
+// provisioning budget because this read sits on the discovery and quote hot
+// paths; a hung RPC degrades availability to "unknown" instead of pinning the
+// request.
+const MARKET_QUEUE_READ_TIMEOUT_MS = 15_000;
+
+// Adapt the kit's on-chain jobs reader (branded Solana Address and enum types)
+// to the availability service's plain string/number contract. One
+// getProgramAccounts call returns every market's queue; a transient RPC failure
+// becomes an err value so the discovery and quote paths degrade to "unknown"
+// rather than throwing. No API key is needed: this is a public chain read.
+const marketQueueSource: MarketQueueSource = {
+  readAllMarketQueues: async () => {
+    try {
+      const markets = await withTimeout(
+        nosanaClient.jobs.markets(),
+        "jobs.markets",
+        MARKET_QUEUE_READ_TIMEOUT_MS,
+      );
+      return ok(
+        markets.map((market) => ({
+          address: market.address,
+          queueType: market.queueType,
+          queueLength: market.queue.length,
+        })),
+      );
+    } catch (queueError) {
+      const message = queueError instanceof Error ? queueError.message : String(queueError);
+      return err(`on-chain market queues read failed: ${message}`);
+    }
+  },
+};
+const availabilityService = createAvailabilityService(marketQueueSource);
+
 const x402Handler = buildX402Handler(config);
 const settlementStore = createSettlementStore(config.settlementDbPath);
 const provisioningService = createProvisioningService(config);
@@ -58,10 +96,17 @@ app.use(
 );
 
 app.get("/health", (context) => context.json({ status: "ok" }));
-app.route("/markets", createMarketsRouter(marketsService));
+app.route("/markets", createMarketsRouter(marketsService, availabilityService));
 app.route(
   "/rent",
-  createRentRouter({ config, marketsService, x402Handler, settlementStore, provisioningService }),
+  createRentRouter({
+    config,
+    marketsService,
+    availabilityService,
+    x402Handler,
+    settlementStore,
+    provisioningService,
+  }),
 );
 app.route(
   "/admin",

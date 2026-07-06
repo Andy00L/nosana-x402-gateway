@@ -12,6 +12,12 @@ import type { SettlementStore } from "../lib/settlementStore.js";
 import type { ProvisioningService } from "../lib/provisioning.js";
 import { createRentSession, verifyRentSession } from "../lib/session.js";
 import {
+  type AvailabilityService,
+  type MarketAvailability,
+  formatAvailability,
+  shouldRefuseUnavailable,
+} from "../lib/availability.js";
+import {
   MIN_RENT_DURATION_MINUTES,
   MAX_RENT_DURATION_MINUTES,
   type GatewayConfig,
@@ -40,6 +46,10 @@ interface RentRequest {
   readonly market: string;
   readonly durationMinutes: number;
   readonly jobDefinition: unknown;
+  // Opt-in safety valve: when true, the gateway refuses to charge unless a GPU
+  // host is idle in this market right now, instead of taking payment and sitting
+  // in the market queue. Defaults to false (pay and wait for a host).
+  readonly requireAvailable: boolean;
 }
 
 const parseRentRequest = (body: unknown): Result<RentRequest> => {
@@ -47,7 +57,7 @@ const parseRentRequest = (body: unknown): Result<RentRequest> => {
   if (!objectBody.ok) {
     return objectBody;
   }
-  const { market, duration_minutes, job_definition } = objectBody.value;
+  const { market, duration_minutes, job_definition, require_available } = objectBody.value;
   if (typeof market !== "string" || market.length === 0) {
     return err('"market" is required: a market slug (see GET /markets) or address');
   }
@@ -58,7 +68,15 @@ const parseRentRequest = (body: unknown): Result<RentRequest> => {
   if (job_definition === undefined || job_definition === null) {
     return err('"job_definition" is required: a Nosana job definition object');
   }
-  return ok({ market, durationMinutes: durationCheck.value, jobDefinition: job_definition });
+  if (require_available !== undefined && typeof require_available !== "boolean") {
+    return err('"require_available" must be a boolean when provided');
+  }
+  return ok({
+    market,
+    durationMinutes: durationCheck.value,
+    jobDefinition: job_definition,
+    requireAvailable: require_available === true,
+  });
 };
 
 const parseExtendRequest = (body: unknown): Result<number> => {
@@ -72,14 +90,21 @@ const parseExtendRequest = (body: unknown): Result<number> => {
 interface RentRouterDependencies {
   readonly config: GatewayConfig;
   readonly marketsService: MarketsService;
+  readonly availabilityService: AvailabilityService;
   readonly x402Handler: X402PaymentHandler;
   readonly settlementStore: SettlementStore;
   readonly provisioningService: ProvisioningService;
 }
 
 export const createRentRouter = (dependencies: RentRouterDependencies): Hono => {
-  const { config, marketsService, x402Handler, settlementStore, provisioningService } =
-    dependencies;
+  const {
+    config,
+    marketsService,
+    availabilityService,
+    x402Handler,
+    settlementStore,
+    provisioningService,
+  } = dependencies;
   const rentRouter = new Hono();
 
   // Quote branch shared by /rent and /rent/:id/extend. When fulfillment is
@@ -91,6 +116,7 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
     context: Context,
     quote: RentQuote,
     requirements: PaymentRequirements,
+    availability?: Result<MarketAvailability>,
   ) => {
     if (provisioningService.isConfigured) {
       const capacityCheck = await provisioningService.checkCreditsCoverQuote(quote);
@@ -102,7 +128,15 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
     console.log(
       `[respondWithPaymentRequired] 402 quote: market=${quote.market.slug} minutes=${quote.durationMinutes} amountAtomic=${quote.amountAtomic}`,
     );
-    return context.json(paymentRequiredResponse.body, 402);
+    // x402 v2 body is { x402Version, error, accepts } (sourceRef: x402-solana
+    // create402Response). Adding a sibling availability block is non-breaking:
+    // x402 clients read `accepts` and ignore unknown keys. Only the rent quote
+    // carries it; extend omits it because the host is already assigned to the
+    // running deployment.
+    const responseBody = availability
+      ? { ...paymentRequiredResponse.body, availability: formatAvailability(availability) }
+      : paymentRequiredResponse.body;
+    return context.json(responseBody, 402);
   };
 
   rentRouter.post("/", async (context) => {
@@ -140,6 +174,22 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
       return respondWithJsonError(context, 500, quoteResult.reason);
     }
 
+    // Read GPU availability once (best-effort, cached) and reuse it for the
+    // opt-in require_available gate and the 402 disclosure below, so an agent
+    // learns before paying whether a host is idle now or it will wait in the
+    // market queue. Checked before building payment requirements so a
+    // require_available refusal costs no facilitator round-trip.
+    const availability = await availabilityService.getMarketAvailability(
+      quoteResult.value.market.address,
+    );
+    if (shouldRefuseUnavailable(rentRequest.value.requireAvailable, availability)) {
+      return respondWithJsonError(
+        context,
+        409,
+        "require_available was set but no GPU host is idle in this market right now: retry later, or omit require_available to pay and wait in the queue",
+      );
+    }
+
     const requirementsResult = await buildPaymentRequirementsSafely(
       x402Handler,
       config,
@@ -152,7 +202,12 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
 
     const paymentHeader = x402Handler.extractPayment(context.req.raw.headers);
     if (!paymentHeader) {
-      return respondWithPaymentRequired(context, quoteResult.value, requirementsResult.value);
+      return respondWithPaymentRequired(
+        context,
+        quoteResult.value,
+        requirementsResult.value,
+        availability,
+      );
     }
 
     const payment = await collectPayment(
