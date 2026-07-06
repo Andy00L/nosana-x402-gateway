@@ -88,3 +88,63 @@ describe("createSettlementStore", () => {
     expect(store.listPaidWithoutDeployment()).toHaveLength(0);
   });
 });
+
+describe("summarizeLedger", () => {
+  test("an empty ledger is all zeros", () => {
+    const summary = createSettlementStore(IN_MEMORY_DB).summarizeLedger();
+    expect(summary).toEqual({
+      reservedCount: 0,
+      settledCount: 0,
+      settledAtomicTotal: "0",
+      provisionedCount: 0,
+      provisionedAtomicTotal: "0",
+      provisionFailedCount: 0,
+      provisionFailedAtomicTotal: "0",
+    });
+  });
+
+  test("counts and sums each status in integer atomic units", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    // Two provisioned (10000 + 43600), one provision_failed (10000),
+    // one settled-and-stuck (2040000), one bare reservation (no money moved).
+    store.reservePayment("prov-1", { ...QUOTE_INFO, amountAtomic: "10000" });
+    store.markSettled("prov-1", "tx-1", "payer-1");
+    store.markProvisioned("prov-1", "dep-1");
+
+    store.reservePayment("prov-2", { ...QUOTE_INFO, amountAtomic: "43600" });
+    store.markSettled("prov-2", "tx-2", "payer-2");
+    store.markProvisioned("prov-2", "dep-2");
+
+    store.reservePayment("fail-1", { ...QUOTE_INFO, amountAtomic: "10000" });
+    store.markSettled("fail-1", "tx-3", "payer-3");
+    store.markProvisionFailed("fail-1", null);
+
+    store.reservePayment("stuck-1", { ...QUOTE_INFO, amountAtomic: "2040000" });
+    store.markSettled("stuck-1", "tx-4", "payer-4");
+
+    store.reservePayment("held-1", { ...QUOTE_INFO, amountAtomic: "99999" });
+
+    const summary = store.summarizeLedger();
+    expect(summary.provisionedCount).toBe(2);
+    expect(summary.provisionedAtomicTotal).toBe("53600");
+    expect(summary.provisionFailedCount).toBe(1);
+    expect(summary.provisionFailedAtomicTotal).toBe("10000");
+    expect(summary.settledCount).toBe(1);
+    expect(summary.settledAtomicTotal).toBe("2040000");
+    expect(summary.reservedCount).toBe(1);
+  });
+
+  test("keeps precision above the float-safe integer limit", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    // Two rows each above Number.MAX_SAFE_INTEGER; a REAL SUM would drift.
+    const largeAtomic = "9007199254740993"; // 2^53 + 1
+    store.reservePayment("big-1", { ...QUOTE_INFO, amountAtomic: largeAtomic });
+    store.markSettled("big-1", "tx-b1", "payer-b1");
+    store.markProvisioned("big-1", "dep-b1");
+    store.reservePayment("big-2", { ...QUOTE_INFO, amountAtomic: largeAtomic });
+    store.markSettled("big-2", "tx-b2", "payer-b2");
+    store.markProvisioned("big-2", "dep-b2");
+    const summary = store.summarizeLedger();
+    expect(summary.provisionedAtomicTotal).toBe("18014398509481986"); // exact 2 * (2^53 + 1)
+  });
+});

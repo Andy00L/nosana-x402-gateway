@@ -7,6 +7,7 @@ import { createSettlementStore } from "./lib/settlementStore.js";
 import { createProvisioningService } from "./lib/provisioning.js";
 import { createRentRouter } from "./routes/rent.js";
 import { createMarketsRouter } from "./routes/markets.js";
+import { createAdminRouter } from "./routes/admin.js";
 
 const configResult = loadGatewayConfig(process.env);
 if (!configResult.ok) {
@@ -48,6 +49,10 @@ app.route("/markets", createMarketsRouter(marketsService));
 app.route(
   "/rent",
   createRentRouter({ config, marketsService, x402Handler, settlementStore, provisioningService }),
+);
+app.route(
+  "/admin",
+  createAdminRouter({ config, settlementStore, creditsSource: provisioningService }),
 );
 
 console.log(

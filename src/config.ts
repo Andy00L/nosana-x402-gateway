@@ -37,6 +37,13 @@ export interface GatewayConfig {
   readonly nosanaApiKey: string | undefined;
   readonly jwtSecret: string;
   readonly settlementDbPath: string;
+  // Token that guards GET /admin/ledger. When undefined the admin surface
+  // returns 404 and exposes nothing.
+  readonly adminToken: string | undefined;
+  // Credits float floor in USD cents: the gateway refuses a rental that would
+  // drop its Nosana balance below this. Default 0 (refuse only when it cannot
+  // cover the rental at all).
+  readonly minCreditsFloorCents: number;
   readonly port: number;
 }
 
@@ -69,6 +76,16 @@ export const loadGatewayConfig = (
     );
   }
 
+  const floorRaw = environment.MIN_CREDITS_FLOOR_CENTS;
+  // Number (not parseInt) so "1.5" is rejected rather than silently truncated
+  // to 1. A whole-cent floor is the only valid shape.
+  const minCreditsFloorCents = floorRaw === undefined ? 0 : Number(floorRaw);
+  if (!Number.isInteger(minCreditsFloorCents) || minCreditsFloorCents < 0) {
+    return err(
+      `MIN_CREDITS_FLOOR_CENTS must be a non-negative integer, got "${floorRaw}"`,
+    );
+  }
+
   const portRaw = environment.PORT;
   const port = portRaw === undefined ? DEFAULT_PORT : Number.parseInt(portRaw, 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -84,6 +101,8 @@ export const loadGatewayConfig = (
     nosanaApiKey: environment.NOSANA_API_KEY || undefined,
     jwtSecret,
     settlementDbPath: environment.SETTLEMENT_DB_PATH ?? DEFAULT_SETTLEMENT_DB_PATH,
+    adminToken: environment.ADMIN_TOKEN || undefined,
+    minCreditsFloorCents,
     port,
   });
 };

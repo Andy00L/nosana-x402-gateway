@@ -13,6 +13,36 @@ import type { RentQuote } from "./pricing.js";
 // schema, getCreditsBalance: "Credits assigned to the user in USD cents").
 const MICRO_USD_PER_CENT = 10_000n;
 
+// The gateway's spendable credits, in USD cents, as read from Nosana.
+// availableCents is the amount left after reservations and settled spend.
+export interface CreditsBalance {
+  readonly assignedCents: number;
+  readonly reservedCents: number;
+  readonly settledCents: number;
+  readonly availableCents: number;
+}
+
+// Coverage decision, extracted as a pure function so it is unit-testable
+// without a network client. Refuses when settling this rental would drop the
+// balance below the configured float floor. All comparisons are integer
+// BigInt math (no float on money).
+export const evaluateCreditsCoverage = (params: {
+  availableCents: number;
+  quoteAmountAtomic: string;
+  floorCents: number;
+}): Result<void> => {
+  const availableMicroUsd =
+    params.availableCents > 0 ? BigInt(params.availableCents) * MICRO_USD_PER_CENT : 0n;
+  const floorMicroUsd = BigInt(Math.max(0, params.floorCents)) * MICRO_USD_PER_CENT;
+  const remainingAfterRental = availableMicroUsd - BigInt(params.quoteAmountAtomic);
+  if (remainingAfterRental < floorMicroUsd) {
+    return err(
+      "gateway credits balance cannot cover this rental right now: retry later or pick a cheaper market",
+    );
+  }
+  return ok(undefined);
+};
+
 export interface ProvisionedDeployment {
   readonly deploymentId: string;
   readonly status: string;
@@ -38,6 +68,7 @@ export interface DeploymentSnapshot {
 
 export interface ProvisioningService {
   readonly isConfigured: boolean;
+  getCreditsBalance: () => Promise<Result<CreditsBalance>>;
   checkCreditsCoverQuote: (quote: RentQuote) => Promise<Result<void>>;
   provisionDeployment: (request: ProvisionRequest) => Promise<Result<ProvisionedDeployment>>;
   getDeployment: (deploymentId: string) => Promise<Result<DeploymentSnapshot>>;
@@ -63,6 +94,7 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
   if (!apiKey) {
     return {
       isConfigured: false,
+      getCreditsBalance: async () => err(NOT_CONFIGURED_REASON),
       checkCreditsCoverQuote: async () => err(NOT_CONFIGURED_REASON),
       provisionDeployment: async () => err(NOT_CONFIGURED_REASON),
       getDeployment: async () => err(NOT_CONFIGURED_REASON),
@@ -73,25 +105,38 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
 
   const nosanaClient = createNosanaClient(config.nosanaNetwork, { api: { apiKey } });
 
-  const checkCreditsCoverQuote: ProvisioningService["checkCreditsCoverQuote"] = async (
-    quote,
-  ) => {
+  const getCreditsBalance: ProvisioningService["getCreditsBalance"] = async () => {
     let balance: { assignedCredits: number; reservedCredits: number; settledCredits: number };
     try {
       balance = await nosanaClient.api.credits.balance();
     } catch (balanceError) {
       return err(`credits balance check failed: ${describeApiError(balanceError)}`);
     }
+    // Floor to whole cents; assigned minus what is reserved and already settled
+    // is what remains spendable.
     const availableCents = Math.floor(
       balance.assignedCredits - balance.reservedCredits - balance.settledCredits,
     );
-    const availableMicroUsd = availableCents > 0 ? BigInt(availableCents) * MICRO_USD_PER_CENT : 0n;
-    if (availableMicroUsd < BigInt(quote.amountAtomic)) {
-      return err(
-        "gateway credits balance cannot cover this rental right now: retry later or pick a cheaper market",
-      );
+    return ok({
+      assignedCents: balance.assignedCredits,
+      reservedCents: balance.reservedCredits,
+      settledCents: balance.settledCredits,
+      availableCents,
+    });
+  };
+
+  const checkCreditsCoverQuote: ProvisioningService["checkCreditsCoverQuote"] = async (
+    quote,
+  ) => {
+    const balanceResult = await getCreditsBalance();
+    if (!balanceResult.ok) {
+      return balanceResult;
     }
-    return ok(undefined);
+    return evaluateCreditsCoverage({
+      availableCents: balanceResult.value.availableCents,
+      quoteAmountAtomic: quote.amountAtomic,
+      floorCents: config.minCreditsFloorCents,
+    });
   };
 
   const provisionDeployment: ProvisioningService["provisionDeployment"] = async (request) => {
@@ -189,6 +234,7 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
 
   return {
     isConfigured: true,
+    getCreditsBalance,
     checkCreditsCoverQuote,
     provisionDeployment,
     getDeployment,

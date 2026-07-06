@@ -22,6 +22,19 @@ export interface SettlementRecord {
   readonly deploymentId: string | null;
 }
 
+// Per-status counts and atomic-unit totals, for reconciliation. Totals are
+// strings because they are sums of USDC atomic units and must stay in integer
+// precision (no float on money).
+export interface LedgerSummary {
+  readonly reservedCount: number;
+  readonly settledCount: number;
+  readonly settledAtomicTotal: string;
+  readonly provisionedCount: number;
+  readonly provisionedAtomicTotal: string;
+  readonly provisionFailedCount: number;
+  readonly provisionFailedAtomicTotal: string;
+}
+
 // The raw PAYMENT-SIGNATURE header embeds the signed transaction; storing its
 // hash is enough for dedupe and keeps payment material out of the database.
 export const hashPaymentHeader = (paymentHeader: string): string =>
@@ -37,6 +50,7 @@ export interface SettlementStore {
   markProvisioned: (paymentKey: string, deploymentId: string) => void;
   markProvisionFailed: (paymentKey: string, deploymentId: string | null) => void;
   listPaidWithoutDeployment: () => SettlementRecord[];
+  summarizeLedger: () => LedgerSummary;
 }
 
 interface SettlementRow {
@@ -159,6 +173,35 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
     return rows.map(mapRowToRecord);
   };
 
+  const summarizeLedger: SettlementStore["summarizeLedger"] = () => {
+    // SUM over CAST-to-INTEGER keeps money in integer units (no float on
+    // money). SQLite INTEGER is 64-bit, exact up to about 9.2e18 atomic units
+    // (about 9.2e12 USD), far above any realistic gateway volume.
+    const rows = database
+      .query(
+        `SELECT status,
+                COUNT(*) AS cnt,
+                CAST(COALESCE(SUM(CAST(amount_atomic AS INTEGER)), 0) AS TEXT) AS total
+           FROM settlements
+          GROUP BY status`,
+      )
+      .all() as { status: SettlementStatus; cnt: number; total: string }[];
+    const rowsByStatus = new Map(rows.map((row) => [row.status, row]));
+    const countForStatus = (status: SettlementStatus): number =>
+      rowsByStatus.get(status)?.cnt ?? 0;
+    const totalForStatus = (status: SettlementStatus): string =>
+      rowsByStatus.get(status)?.total ?? "0";
+    return {
+      reservedCount: countForStatus("reserved"),
+      settledCount: countForStatus("settled"),
+      settledAtomicTotal: totalForStatus("settled"),
+      provisionedCount: countForStatus("provisioned"),
+      provisionedAtomicTotal: totalForStatus("provisioned"),
+      provisionFailedCount: countForStatus("provision_failed"),
+      provisionFailedAtomicTotal: totalForStatus("provision_failed"),
+    };
+  };
+
   return {
     reservePayment,
     releaseReservation,
@@ -166,5 +209,6 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
     markProvisioned,
     markProvisionFailed,
     listPaidWithoutDeployment,
+    summarizeLedger,
   };
 };

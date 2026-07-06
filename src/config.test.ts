@@ -21,6 +21,8 @@ describe("loadGatewayConfig", () => {
       expect(config.value.facilitatorUrl).toBe("https://facilitator.payai.network");
       expect(config.value.settlementDbPath).toBe("data/gateway.db");
       expect(config.value.nosanaApiKey).toBeUndefined();
+      expect(config.value.adminToken).toBeUndefined();
+      expect(config.value.minCreditsFloorCents).toBe(0);
     }
   });
 
@@ -77,5 +79,27 @@ describe("loadGatewayConfig", () => {
     if (config.ok) {
       expect(config.value.nosanaApiKey).toBeUndefined();
     }
+  });
+
+  test("reads the admin token and the credits floor when set", () => {
+    const environment = {
+      ...buildValidEnvironment(),
+      ADMIN_TOKEN: "s3cr3t-admin-token",
+      MIN_CREDITS_FLOOR_CENTS: "50",
+    };
+    const config = loadGatewayConfig(environment);
+    expect(config.ok).toBe(true);
+    if (config.ok) {
+      expect(config.value.adminToken).toBe("s3cr3t-admin-token");
+      expect(config.value.minCreditsFloorCents).toBe(50);
+    }
+  });
+
+  test("rejects a negative or non-integer credits floor", () => {
+    const negativeFloor = { ...buildValidEnvironment(), MIN_CREDITS_FLOOR_CENTS: "-10" };
+    expect(loadGatewayConfig(negativeFloor).ok).toBe(false);
+
+    const fractionalFloor = { ...buildValidEnvironment(), MIN_CREDITS_FLOOR_CENTS: "1.5" };
+    expect(loadGatewayConfig(fractionalFloor).ok).toBe(false);
   });
 });
