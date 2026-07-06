@@ -91,10 +91,10 @@ export const createAdminRouter = (dependencies: AdminRouterDependencies): Hono =
       reconciliation: buildReconciliation(summary),
       nosana_credits: balanceResult.ok
         ? {
-            assigned_cents: balanceResult.value.assignedCents,
-            reserved_cents: balanceResult.value.reservedCents,
-            settled_cents: balanceResult.value.settledCents,
-            available_cents: balanceResult.value.availableCents,
+            assigned_usd: balanceResult.value.assignedUsd,
+            reserved_usd: balanceResult.value.reservedUsd,
+            settled_usd: balanceResult.value.settledUsd,
+            available_usd: balanceResult.value.availableUsd,
           }
         : { error: balanceResult.reason },
     });

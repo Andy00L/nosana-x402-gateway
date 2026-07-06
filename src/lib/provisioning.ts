@@ -8,34 +8,37 @@ import { type Result, ok, err } from "./result.js";
 import type { GatewayConfig } from "../config.js";
 import type { RentQuote } from "./pricing.js";
 
-// 1 USD cent equals 10^4 USDC atomic units (USDC has 6 decimals). The credits
-// balance is expressed in USD cents (sourceRef: @nosana/api client-manager
-// schema, getCreditsBalance: "Credits assigned to the user in USD cents").
-const MICRO_USD_PER_CENT = 10_000n;
+// USDC has 6 decimals, so 1 USD cent = 10^4 atomic units. The Nosana credits
+// balance is denominated in USD DOLLARS (float), NOT cents: the API schema
+// comment says "USD cents" but the live dashboard proves dollars (assigned
+// 58 minus settled 7.869 = 50.13, shown as $50.13; verified 2026-07-05).
+const USDC_ATOMIC_PER_CENT = 10_000n;
 
-// The gateway's spendable credits, in USD cents, as read from Nosana.
-// availableCents is the amount left after reservations and settled spend.
+// The gateway's spendable credits, in USD dollars, as read from Nosana.
+// availableUsd is what remains after reservations and settled spend.
 export interface CreditsBalance {
-  readonly assignedCents: number;
-  readonly reservedCents: number;
-  readonly settledCents: number;
-  readonly availableCents: number;
+  readonly assignedUsd: number;
+  readonly reservedUsd: number;
+  readonly settledUsd: number;
+  readonly availableUsd: number;
 }
 
 // Coverage decision, extracted as a pure function so it is unit-testable
 // without a network client. Refuses when settling this rental would drop the
-// balance below the configured float floor. All comparisons are integer
-// BigInt math (no float on money).
+// balance below the configured floor. The dollar balance is converted to
+// integer atomic units once (floored to whole cents, the conservative
+// direction, since floats cannot be trusted for settlement math); every
+// comparison after that is integer BigInt.
 export const evaluateCreditsCoverage = (params: {
-  availableCents: number;
+  availableUsd: number;
   quoteAmountAtomic: string;
   floorCents: number;
 }): Result<void> => {
-  const availableMicroUsd =
-    params.availableCents > 0 ? BigInt(params.availableCents) * MICRO_USD_PER_CENT : 0n;
-  const floorMicroUsd = BigInt(Math.max(0, params.floorCents)) * MICRO_USD_PER_CENT;
-  const remainingAfterRental = availableMicroUsd - BigInt(params.quoteAmountAtomic);
-  if (remainingAfterRental < floorMicroUsd) {
+  const availableCents = params.availableUsd > 0 ? Math.floor(params.availableUsd * 100) : 0;
+  const availableAtomic = BigInt(availableCents) * USDC_ATOMIC_PER_CENT;
+  const floorAtomic = BigInt(Math.max(0, params.floorCents)) * USDC_ATOMIC_PER_CENT;
+  const remainingAfterRental = availableAtomic - BigInt(params.quoteAmountAtomic);
+  if (remainingAfterRental < floorAtomic) {
     return err(
       "gateway credits balance cannot cover this rental right now: retry later or pick a cheaper market",
     );
@@ -145,16 +148,15 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
     } catch (balanceError) {
       return err(`credits balance check failed: ${describeApiError(balanceError)}`);
     }
-    // Floor to whole cents; assigned minus what is reserved and already settled
-    // is what remains spendable.
-    const availableCents = Math.floor(
-      balance.assignedCredits - balance.reservedCredits - balance.settledCredits,
-    );
+    // Fields are USD dollars. Available is assigned minus what is reserved and
+    // already settled.
+    const availableUsd =
+      balance.assignedCredits - balance.reservedCredits - balance.settledCredits;
     return ok({
-      assignedCents: balance.assignedCredits,
-      reservedCents: balance.reservedCredits,
-      settledCents: balance.settledCredits,
-      availableCents,
+      assignedUsd: balance.assignedCredits,
+      reservedUsd: balance.reservedCredits,
+      settledUsd: balance.settledCredits,
+      availableUsd,
     });
   };
 
@@ -166,7 +168,7 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
       return balanceResult;
     }
     return evaluateCreditsCoverage({
-      availableCents: balanceResult.value.availableCents,
+      availableUsd: balanceResult.value.availableUsd,
       quoteAmountAtomic: quote.amountAtomic,
       floorCents: config.minCreditsFloorCents,
     });

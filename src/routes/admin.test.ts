@@ -30,7 +30,7 @@ const buildSeededStore = () => {
 };
 
 const okBalance = (): Result<CreditsBalance> =>
-  ok({ assignedCents: 100, reservedCents: 0, settledCents: 40, availableCents: 60 });
+  ok({ assignedUsd: 100, reservedUsd: 0, settledUsd: 40, availableUsd: 60 });
 
 const buildRouter = (
   adminToken: string | undefined,
@@ -70,14 +70,14 @@ describe("createAdminRouter", () => {
         custodial_float_atomic: string;
         refund_owed_count: number;
       };
-      nosana_credits: { available_cents: number };
+      nosana_credits: { available_usd: number };
     };
     // Identity holds exactly: usdcIn = creditsSpent + custodialFloat.
     expect(body.reconciliation.usdc_in_atomic).toBe("53600");
     expect(body.reconciliation.credits_spent_atomic).toBe("43600");
     expect(body.reconciliation.custodial_float_atomic).toBe("10000");
     expect(body.reconciliation.refund_owed_count).toBe(1);
-    expect(body.nosana_credits.available_cents).toBe(60);
+    expect(body.nosana_credits.available_usd).toBe(60);
   });
 
   test("still serves the ledger when the credits balance is unreachable", async () => {
