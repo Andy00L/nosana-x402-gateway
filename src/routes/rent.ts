@@ -174,10 +174,14 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
     });
     if (!provisionResult.ok) {
       // Paid but not provisioned: the exact case the refund path exists for.
-      // Recorded in the store; the startup recovery scan lists these loudly.
-      settlementStore.markProvisionFailed(payment.value.paymentKey, null);
+      // Record the created deployment id when there is one (start failed after
+      // create) so recovery can find and stop the orphan (audit H3).
+      settlementStore.markProvisionFailed(
+        payment.value.paymentKey,
+        provisionResult.reason.deploymentId,
+      );
       console.error(
-        `[createRentRouter] PAID BUT PROVISION FAILED tx=${payment.value.txSignature} reason=${provisionResult.reason}`,
+        `[createRentRouter] PAID BUT PROVISION FAILED tx=${payment.value.txSignature} deployment=${provisionResult.reason.deploymentId} reason=${provisionResult.reason.message}`,
       );
       return respondWithJsonError(
         context,
@@ -314,14 +318,17 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
     }
     settlementStore.markProvisioned(payment.value.paymentKey, deploymentId);
 
-    // Refresh the session so it outlives the extended rental: the new expiry
-    // is sized from the deployment's new total timeout.
+    // Refresh the session so it outlives the extended rental. The expiry is
+    // sized from the deployment's new TOTAL timeout but anchored to the original
+    // session start (its iat), not now, so cumulative extends do not inflate the
+    // session far past the real compute window (audit M3).
     const refreshedSession = await createRentSession({
       deploymentId,
       payer: payment.value.payer,
       txSignature: payment.value.txSignature,
       durationMinutes: extendResult.value.timeoutMinutes,
       jwtSecret: config.jwtSecret,
+      startedAtSeconds: session.value.iat,
     });
 
     console.log(

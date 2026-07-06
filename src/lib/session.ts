@@ -20,14 +20,20 @@ export const createRentSession = async (params: {
   txSignature: string;
   durationMinutes: number;
   jwtSecret: string;
+  // Unix seconds the rental clock starts from. Defaults to now (initial rent).
+  // On extend, pass the original session iat so the expiry is anchored to the
+  // deployment's real start and does not treat the cumulative total timeout as
+  // if it began now (audit M3).
+  startedAtSeconds?: number;
 }): Promise<string> => {
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const startedAtSeconds = params.startedAtSeconds ?? nowSeconds;
   const claims: RentSessionClaims = {
     deployment_id: params.deploymentId,
     payer: params.payer,
     tx_signature: params.txSignature,
     iat: nowSeconds,
-    exp: nowSeconds + params.durationMinutes * 60 + SESSION_GRACE_SECONDS,
+    exp: startedAtSeconds + params.durationMinutes * 60 + SESSION_GRACE_SECONDS,
   };
   // HS256 pinned explicitly on both sign and verify so a library default
   // change can never downgrade the algorithm silently.

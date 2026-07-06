@@ -45,12 +45,20 @@ export const buildPaymentRequirementsSafely = async (
   }
 };
 
+// The subset of the x402 handler the payment gauntlet needs. Narrowing to this
+// lets the gauntlet be unit-tested with a stub, and the real handler satisfies
+// it structurally.
+export type PaymentFacilitatorClient = Pick<
+  X402PaymentHandler,
+  "verifyPayment" | "settlePayment"
+>;
+
 // verify and settle also reach the facilitator over the network and throw on
 // transport failure; wrapped for the same errors-as-values reason as above.
 // A thrown transport error is distinct from a rejected payment: the first is
 // our 502, the second is the agent's 402.
 export const verifyPaymentSafely = async (
-  x402Handler: X402PaymentHandler,
+  x402Handler: PaymentFacilitatorClient,
   paymentHeader: string,
   requirements: PaymentRequirements,
 ): Promise<Result<VerifyResponse>> => {
@@ -66,7 +74,7 @@ export const verifyPaymentSafely = async (
 };
 
 export const settlePaymentSafely = async (
-  x402Handler: X402PaymentHandler,
+  x402Handler: PaymentFacilitatorClient,
   paymentHeader: string,
   requirements: PaymentRequirements,
 ): Promise<Result<SettleResponse>> => {

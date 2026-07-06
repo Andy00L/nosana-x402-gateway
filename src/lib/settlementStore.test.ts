@@ -87,6 +87,26 @@ describe("createSettlementStore", () => {
     store.reservePayment("key-1", QUOTE_INFO);
     expect(store.listPaidWithoutDeployment()).toHaveLength(0);
   });
+
+  test("settle_unknown is surfaced as owed and blocks replay of the same key", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    store.reservePayment("key-1", QUOTE_INFO);
+    store.markSettleUnknown("key-1");
+    // Money may have moved: it must appear as a refund/reconciliation owed.
+    const owed = store.listPaidWithoutDeployment();
+    expect(owed).toHaveLength(1);
+    expect(owed[0]?.status).toBe("settle_unknown");
+    // The key is not released, so the same header cannot be resubmitted (C1).
+    expect(store.reservePayment("key-1", QUOTE_INFO).ok).toBe(false);
+  });
+
+  test("settle_rejected moved no money: not owed, but still blocks replay", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    store.reservePayment("key-1", QUOTE_INFO);
+    store.markSettleRejected("key-1");
+    expect(store.listPaidWithoutDeployment()).toHaveLength(0);
+    expect(store.reservePayment("key-1", QUOTE_INFO).ok).toBe(false);
+  });
 });
 
 describe("summarizeLedger", () => {
@@ -100,6 +120,10 @@ describe("summarizeLedger", () => {
       provisionedAtomicTotal: "0",
       provisionFailedCount: 0,
       provisionFailedAtomicTotal: "0",
+      settleUnknownCount: 0,
+      settleUnknownAtomicTotal: "0",
+      settleRejectedCount: 0,
+      settleRejectedAtomicTotal: "0",
     });
   });
 

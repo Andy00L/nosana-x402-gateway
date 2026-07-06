@@ -4,12 +4,24 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Result, ok, err } from "./result.js";
 
-// Payment lifecycle: reserved -> settled -> provisioned | provision_failed.
-// A reservation is deleted when settle fails, so the payer can retry the same
-// signed transaction after a transient facilitator failure. Persistent by
-// design: a crash between settle and provision must survive a restart
-// (docs/x402-execution-plan.md section 6).
-export type SettlementStatus = "reserved" | "settled" | "provisioned" | "provision_failed";
+// Payment lifecycle:
+//   reserved -> settled -> provisioned | provision_failed
+//   reserved -> settle_unknown   (settle transport error: money MAY have moved)
+//   reserved -> settle_rejected  (facilitator explicitly refused: money did NOT move)
+// A reservation row is only ever DELETED before settle is attempted (a capacity
+// refusal, where no money moved). Once settle is attempted the row is never
+// deleted: deleting it would reopen a replay window where a settle that landed
+// on-chain but failed to return could be resubmitted and provision twice
+// (security audit finding C1). settle_unknown is money possibly owed and is
+// surfaced for reconciliation; settle_rejected moved no money. Persistent by
+// design: a crash between settle and provision must survive a restart.
+export type SettlementStatus =
+  | "reserved"
+  | "settled"
+  | "provisioned"
+  | "provision_failed"
+  | "settle_unknown"
+  | "settle_rejected";
 
 export interface SettlementRecord {
   readonly paymentKey: string;
@@ -33,6 +45,10 @@ export interface LedgerSummary {
   readonly provisionedAtomicTotal: string;
   readonly provisionFailedCount: number;
   readonly provisionFailedAtomicTotal: string;
+  readonly settleUnknownCount: number;
+  readonly settleUnknownAtomicTotal: string;
+  readonly settleRejectedCount: number;
+  readonly settleRejectedAtomicTotal: string;
 }
 
 // The raw PAYMENT-SIGNATURE header embeds the signed transaction; storing its
@@ -47,6 +63,11 @@ export interface SettlementStore {
   ) => Result<void>;
   releaseReservation: (paymentKey: string) => void;
   markSettled: (paymentKey: string, txSignature: string, payer: string | null) => Result<void>;
+  // Settle was attempted but its outcome is unknown (transport error/timeout):
+  // money may have moved. Blocks replay of the same key and is surfaced as owed.
+  markSettleUnknown: (paymentKey: string) => void;
+  // Facilitator explicitly refused: no money moved. Blocks replay of the key.
+  markSettleRejected: (paymentKey: string) => void;
   markProvisioned: (paymentKey: string, deploymentId: string) => void;
   markProvisionFailed: (paymentKey: string, deploymentId: string | null) => void;
   listPaidWithoutDeployment: () => SettlementRecord[];
@@ -138,6 +159,29 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
     }
   };
 
+  const markSettleUnknown: SettlementStore["markSettleUnknown"] = (paymentKey) => {
+    // From a reserved row only: the settle outcome is unknown, so we keep the
+    // key (blocks replay) and flag it as owed. No tx signature is stored (we
+    // either never got one or it collided with an already-settled key).
+    database
+      .query(
+        `UPDATE settlements
+           SET status = 'settle_unknown', updated_at = unixepoch()
+         WHERE payment_key = ?1 AND status = 'reserved'`,
+      )
+      .run(paymentKey);
+  };
+
+  const markSettleRejected: SettlementStore["markSettleRejected"] = (paymentKey) => {
+    database
+      .query(
+        `UPDATE settlements
+           SET status = 'settle_rejected', updated_at = unixepoch()
+         WHERE payment_key = ?1 AND status = 'reserved'`,
+      )
+      .run(paymentKey);
+  };
+
   const markProvisioned: SettlementStore["markProvisioned"] = (paymentKey, deploymentId) => {
     database
       .query(
@@ -162,12 +206,16 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
   };
 
   const listPaidWithoutDeployment: SettlementStore["listPaidWithoutDeployment"] = () => {
+    // Every state where money may have moved but no running deployment resulted:
+    // settled (stuck between settle and provision), provision_failed, and
+    // settle_unknown (settle outcome unresolved). settle_rejected moved no money
+    // and is excluded.
     const rows = database
       .query(
         `SELECT payment_key, status, tx_signature, payer, market_slug,
                 duration_minutes, amount_atomic, deployment_id
            FROM settlements
-          WHERE status IN ('settled', 'provision_failed')`,
+          WHERE status IN ('settled', 'provision_failed', 'settle_unknown')`,
       )
       .all() as SettlementRow[];
     return rows.map(mapRowToRecord);
@@ -199,6 +247,10 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
       provisionedAtomicTotal: totalForStatus("provisioned"),
       provisionFailedCount: countForStatus("provision_failed"),
       provisionFailedAtomicTotal: totalForStatus("provision_failed"),
+      settleUnknownCount: countForStatus("settle_unknown"),
+      settleUnknownAtomicTotal: totalForStatus("settle_unknown"),
+      settleRejectedCount: countForStatus("settle_rejected"),
+      settleRejectedAtomicTotal: totalForStatus("settle_rejected"),
     };
   };
 
@@ -206,6 +258,8 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
     reservePayment,
     releaseReservation,
     markSettled,
+    markSettleUnknown,
+    markSettleRejected,
     markProvisioned,
     markProvisionFailed,
     listPaidWithoutDeployment,

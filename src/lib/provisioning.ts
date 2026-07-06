@@ -49,6 +49,14 @@ export interface ProvisionedDeployment {
   readonly endpoints: { opId: string; port: number | string; url: string }[];
 }
 
+// A provisioning failure carries the deployment id when one was created before
+// the failure (start failed after a successful create), so the refund/recovery
+// path can find and stop the orphaned deployment (audit H3).
+export interface ProvisionFailure {
+  readonly message: string;
+  readonly deploymentId: string | null;
+}
+
 export interface ProvisionRequest {
   readonly marketAddress: string;
   readonly marketSlug: string;
@@ -70,7 +78,9 @@ export interface ProvisioningService {
   readonly isConfigured: boolean;
   getCreditsBalance: () => Promise<Result<CreditsBalance>>;
   checkCreditsCoverQuote: (quote: RentQuote) => Promise<Result<void>>;
-  provisionDeployment: (request: ProvisionRequest) => Promise<Result<ProvisionedDeployment>>;
+  provisionDeployment: (
+    request: ProvisionRequest,
+  ) => Promise<Result<ProvisionedDeployment, ProvisionFailure>>;
   getDeployment: (deploymentId: string) => Promise<Result<DeploymentSnapshot>>;
   extendDeployment: (
     deploymentId: string,
@@ -86,6 +96,29 @@ const describeApiError = (unknownError: unknown): string => {
   return unknownError instanceof Error ? unknownError.message : String(unknownError);
 };
 
+// Nosana SDK calls are bare awaits with no cancellation. Wrap each in a timeout
+// so a hung create/start does not pin a request that already holds a settled
+// payment (audit H4). The underlying call is not truly cancelled, but the
+// request stops waiting and returns a distinct error instead of hanging.
+const NOSANA_CALL_TIMEOUT_MS = 60_000;
+const withTimeout = async <OperationResult>(
+  operation: Promise<OperationResult>,
+  label: string,
+): Promise<OperationResult> => {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutGuard = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(
+      () => reject(new Error(`${label} timed out after ${NOSANA_CALL_TIMEOUT_MS}ms`)),
+      NOSANA_CALL_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([operation, timeoutGuard]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+};
+
 const NOT_CONFIGURED_REASON =
   "gateway has no Nosana API key configured, so it cannot provision deployments";
 
@@ -96,7 +129,7 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
       isConfigured: false,
       getCreditsBalance: async () => err(NOT_CONFIGURED_REASON),
       checkCreditsCoverQuote: async () => err(NOT_CONFIGURED_REASON),
-      provisionDeployment: async () => err(NOT_CONFIGURED_REASON),
+      provisionDeployment: async () => err({ message: NOT_CONFIGURED_REASON, deploymentId: null }),
       getDeployment: async () => err(NOT_CONFIGURED_REASON),
       extendDeployment: async () => err(NOT_CONFIGURED_REASON),
       stopDeployment: async () => err(NOT_CONFIGURED_REASON),
@@ -108,7 +141,7 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
   const getCreditsBalance: ProvisioningService["getCreditsBalance"] = async () => {
     let balance: { assignedCredits: number; reservedCredits: number; settledCredits: number };
     try {
-      balance = await nosanaClient.api.credits.balance();
+      balance = await withTimeout(nosanaClient.api.credits.balance(), "credits.balance");
     } catch (balanceError) {
       return err(`credits balance check failed: ${describeApiError(balanceError)}`);
     }
@@ -145,27 +178,35 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
     const deploymentName = `x402-${request.paymentKey.slice(0, 12)}`;
     let deployment: Awaited<ReturnType<typeof nosanaClient.api.deployments.create>>;
     try {
-      deployment = await nosanaClient.api.deployments.create({
-        name: deploymentName,
-        market: request.marketAddress,
-        replicas: 1,
-        // Timeout is in minutes (sourceRef: @nosana/api deployment-manager
-        // schema DeploymentCreateBody).
-        timeout: request.durationMinutes,
-        strategy: DeploymentStrategy.SIMPLE,
-        job_definition: request.jobDefinition,
-      });
+      deployment = await withTimeout(
+        nosanaClient.api.deployments.create({
+          name: deploymentName,
+          market: request.marketAddress,
+          replicas: 1,
+          // Timeout is in minutes (sourceRef: @nosana/api deployment-manager
+          // schema DeploymentCreateBody).
+          timeout: request.durationMinutes,
+          strategy: DeploymentStrategy.SIMPLE,
+          job_definition: request.jobDefinition,
+        }),
+        "deployments.create",
+      );
     } catch (createError) {
-      return err(`deployment create failed: ${describeApiError(createError)}`);
+      // No deployment was created, so there is nothing to recover.
+      return err({
+        message: `deployment create failed: ${describeApiError(createError)}`,
+        deploymentId: null,
+      });
     }
     try {
-      await deployment.start();
+      await withTimeout(deployment.start(), "deployment.start");
     } catch (startError) {
-      // The deployment exists but is not running; surface its id so the
-      // refund/recovery path can find it.
-      return err(
-        `deployment start failed after create (deployment_id=${deployment.id}): ${describeApiError(startError)}`,
-      );
+      // The deployment exists but did not start: return its id so the
+      // refund/recovery path can find and stop it (audit H3).
+      return err({
+        message: `deployment start failed after create: ${describeApiError(startError)}`,
+        deploymentId: deployment.id,
+      });
     }
     return ok({
       deploymentId: deployment.id,
@@ -174,9 +215,8 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
     });
   };
 
-  const fetchDeploymentHandle = async (deploymentId: string) => {
-    return nosanaClient.api.deployments.get(deploymentId);
-  };
+  const fetchDeploymentHandle = async (deploymentId: string) =>
+    withTimeout(nosanaClient.api.deployments.get(deploymentId), "deployments.get");
 
   const mapDeploymentToSnapshot = (
     deployment: Awaited<ReturnType<typeof fetchDeploymentHandle>>,
@@ -206,15 +246,30 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
     } catch (getError) {
       return err(`deployment lookup failed: ${describeApiError(getError)}`);
     }
+    // updateTimeout sets the TOTAL timeout in minutes, so extending means
+    // current timeout plus the paid extension (sourceRef: @nosana/api
+    // ApiDeployment.updateTimeout and DeploymentCreateBody.timeout).
+    const newTotalTimeout = deployment.timeout + additionalMinutes;
     try {
-      // updateTimeout sets the TOTAL timeout in minutes, so extending means
-      // current timeout plus the paid extension (sourceRef: @nosana/api
-      // ApiDeployment.updateTimeout and DeploymentCreateBody.timeout).
-      await deployment.updateTimeout(deployment.timeout + additionalMinutes);
+      await withTimeout(deployment.updateTimeout(newTotalTimeout), "deployment.updateTimeout");
     } catch (updateError) {
       return err(`deployment extend failed: ${describeApiError(updateError)}`);
     }
-    return getDeployment(deploymentId);
+    // updateTimeout is the commit point: the extension is applied. A failure to
+    // re-read fresh state must NOT be reported as an extend failure, that would
+    // refund an extension the renter already received (audit M2). Fall back to
+    // a snapshot built from the just-applied timeout.
+    const refreshed = await getDeployment(deploymentId);
+    if (refreshed.ok) {
+      return refreshed;
+    }
+    return ok({
+      deploymentId,
+      status: deployment.status,
+      endpoints: deployment.endpoints,
+      timeoutMinutes: newTotalTimeout,
+      marketAddress: deployment.market,
+    });
   };
 
   const stopDeployment: ProvisioningService["stopDeployment"] = async (deploymentId) => {
@@ -225,7 +280,7 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
       return err(`deployment lookup failed: ${describeApiError(getError)}`);
     }
     try {
-      await deployment.stop();
+      await withTimeout(deployment.stop(), "deployment.stop");
     } catch (stopError) {
       return err(`deployment stop failed: ${describeApiError(stopError)}`);
     }

@@ -1,6 +1,10 @@
-import type { PaymentRequirements, X402PaymentHandler } from "x402-solana/server";
+import type { PaymentRequirements } from "x402-solana/server";
 import { type Result, ok, err } from "./result.js";
-import { verifyPaymentSafely, settlePaymentSafely } from "./x402.js";
+import {
+  verifyPaymentSafely,
+  settlePaymentSafely,
+  type PaymentFacilitatorClient,
+} from "./x402.js";
 import { hashPaymentHeader, type SettlementStore } from "./settlementStore.js";
 import type { ProvisioningService } from "./provisioning.js";
 import type { RentQuote } from "./pricing.js";
@@ -10,6 +14,14 @@ import type { RentQuote } from "./pricing.js";
 // verify, reserve (anti-replay), capacity, settle BEFORE fulfillment, record.
 // The caller performs its own fulfillment and marks the outcome on the store
 // (docs/x402-execution-plan.md section 4 step B).
+
+// A Solana transaction signature is 64 bytes base58-encoded (about 86 to 88
+// chars). Reject empty or malformed values the facilitator might return so a
+// bogus signature never becomes our authoritative anti-replay key, and so a
+// success:true with no real transfer never provisions compute (audit H1).
+const SOLANA_SIGNATURE_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
+const isPlausibleSignature = (value: string): boolean =>
+  SOLANA_SIGNATURE_PATTERN.test(value);
 
 export interface PaymentFailure {
   readonly status: 402 | 409 | 502 | 503;
@@ -23,9 +35,12 @@ export interface CompletedPayment {
 }
 
 export interface PaymentFlowDependencies {
-  readonly x402Handler: X402PaymentHandler;
+  readonly x402Handler: PaymentFacilitatorClient;
   readonly settlementStore: SettlementStore;
-  readonly provisioningService: ProvisioningService;
+  readonly provisioningService: Pick<
+    ProvisioningService,
+    "isConfigured" | "checkCreditsCoverQuote"
+  >;
 }
 
 export const collectPayment = async (
@@ -73,11 +88,20 @@ export const collectPayment = async (
 
   const settleResult = await settlePaymentSafely(x402Handler, paymentHeader, requirements);
   if (!settleResult.ok) {
-    settlementStore.releaseReservation(paymentKey);
+    // Settle transport error: the on-chain transfer MAY have landed even though
+    // the call did not return. Do NOT release the reservation, that would let
+    // the same header provision twice (audit C1). Flag as unknown so the key
+    // stays blocked and the payment is surfaced for reconciliation.
+    settlementStore.markSettleUnknown(paymentKey);
+    console.error(
+      `[collectPayment] settle outcome unknown, flagged for reconciliation: ${settleResult.reason}`,
+    );
     return err({ status: 502, message: settleResult.reason });
   }
   if (!settleResult.value.success) {
-    settlementStore.releaseReservation(paymentKey);
+    // Facilitator explicitly refused: no money moved. Keep the key (blocks
+    // replay of this exact header) but record it as rejected, not owed.
+    settlementStore.markSettleRejected(paymentKey);
     return err({
       status: 402,
       message: `payment settlement failed: ${settleResult.value.errorReason ?? "settlement rejected"}`,
@@ -85,11 +109,28 @@ export const collectPayment = async (
   }
 
   const txSignature = settleResult.value.transaction;
+  if (!isPlausibleSignature(txSignature)) {
+    // Settle reported success but returned no usable signature. Money may have
+    // moved; we will not trust a bogus value as our anti-replay key nor
+    // provision on it. Flag for reconciliation (audit H1).
+    settlementStore.markSettleUnknown(paymentKey);
+    console.error(
+      "[collectPayment] settle reported success with an implausible signature, flagged for reconciliation",
+    );
+    return err({
+      status: 502,
+      message: "settlement returned no usable transaction signature: flagged for reconciliation",
+    });
+  }
+
   const payer = verifyResult.value.payer ?? settleResult.value.payer ?? null;
   const settledRecord = settlementStore.markSettled(paymentKey, txSignature, payer);
   if (!settledRecord.ok) {
-    // Money settled but the transaction signature was already recorded under
-    // another payment key: replay caught at the last gate, do not fulfill.
+    // Money settled but this signature is already recorded under another key
+    // (facilitator idempotency or a duplicate header). Do NOT leave the row
+    // 'reserved', that hides settled money from reconciliation (audit H2):
+    // flag it as unknown/owed.
+    settlementStore.markSettleUnknown(paymentKey);
     console.error(`[collectPayment] ${settledRecord.reason} tx=${txSignature}`);
     return err({ status: 409, message: settledRecord.reason });
   }

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { createNosanaClient } from "@nosana/kit";
 import { loadGatewayConfig } from "./config.js";
 import { createMarketsService } from "./lib/markets.js";
@@ -43,6 +44,18 @@ if (!provisioningService.isConfigured) {
 }
 
 const app = new Hono();
+
+// Cap request bodies before any handler reads them. Job definitions are small
+// JSON; 128 KiB is generous and blocks a memory-exhaustion DoS on the money
+// paths (POST /rent and extend parse JSON bodies).
+const MAX_REQUEST_BODY_BYTES = 128 * 1024;
+app.use(
+  "*",
+  bodyLimit({
+    maxSize: MAX_REQUEST_BODY_BYTES,
+    onError: (context) => context.json({ error: "request body too large" }, 413),
+  }),
+);
 
 app.get("/health", (context) => context.json({ status: "ok" }));
 app.route("/markets", createMarketsRouter(marketsService));
