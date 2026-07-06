@@ -5,6 +5,7 @@ import {
   type JobDefinition,
 } from "@nosana/kit";
 import { type Result, ok, err } from "./result.js";
+import { withTimeout as withTimeoutForCall } from "./withTimeout.js";
 import type { GatewayConfig } from "../config.js";
 import type { RentQuote } from "./pricing.js";
 
@@ -99,28 +100,12 @@ const describeApiError = (unknownError: unknown): string => {
   return unknownError instanceof Error ? unknownError.message : String(unknownError);
 };
 
-// Nosana SDK calls are bare awaits with no cancellation. Wrap each in a timeout
-// so a hung create/start does not pin a request that already holds a settled
-// payment (audit H4). The underlying call is not truly cancelled, but the
-// request stops waiting and returns a distinct error instead of hanging.
+// Nosana SDK calls are bare awaits with no cancellation. Bind the shared
+// timeout wrapper to the Nosana call budget so a hung create/start does not pin
+// a request that already holds a settled payment (audit H4).
 const NOSANA_CALL_TIMEOUT_MS = 60_000;
-const withTimeout = async <OperationResult>(
-  operation: Promise<OperationResult>,
-  label: string,
-): Promise<OperationResult> => {
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeoutGuard = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(
-      () => reject(new Error(`${label} timed out after ${NOSANA_CALL_TIMEOUT_MS}ms`)),
-      NOSANA_CALL_TIMEOUT_MS,
-    );
-  });
-  try {
-    return await Promise.race([operation, timeoutGuard]);
-  } finally {
-    clearTimeout(timeoutHandle);
-  }
-};
+const withTimeout = <OperationResult>(operation: Promise<OperationResult>, label: string) =>
+  withTimeoutForCall(operation, label, NOSANA_CALL_TIMEOUT_MS);
 
 const NOT_CONFIGURED_REASON =
   "gateway has no Nosana API key configured, so it cannot provision deployments";
