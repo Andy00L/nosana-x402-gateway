@@ -15,12 +15,18 @@ data/
 # scratch files (per SKILL_GENERAL.md)
 .scratch/
 
+# agent tooling and standards kit: travels with the project on disk, kept out
+# of the public repo
+.claude/
+
 # internal strategy and planning docs stay local, not in the public repo.
 # Published sign-off evidence under docs/evidence/ and the README assets under
 # docs/assets/ are the exceptions.
 docs/*
 !docs/evidence/
 !docs/assets/
+# the design token sheet is an internal reference, kept local only
+docs/assets/DESIGN_TOKENS.md
 
 # logs
 *.log
