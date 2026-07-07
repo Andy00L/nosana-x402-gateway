@@ -6,7 +6,11 @@ import { type Result, ok, err } from "../lib/result.js";
 import { respondWithJsonError } from "../lib/httpError.js";
 import type { MarketsService } from "../lib/markets.js";
 import { computeRentQuote, type RentQuote } from "../lib/pricing.js";
-import { buildPaymentRequirementsSafely } from "../lib/x402.js";
+import {
+  buildPaymentRequirementsSafely,
+  PAYMENT_REQUIRED_HEADER,
+  encodePaymentRequiredHeader,
+} from "../lib/x402.js";
 import { collectPayment } from "../lib/paymentFlow.js";
 import type { SettlementStore } from "../lib/settlementStore.js";
 import type { ProvisioningService } from "../lib/provisioning.js";
@@ -127,6 +131,13 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
     const paymentRequiredResponse = x402Handler.create402Response(requirements, context.req.url);
     console.log(
       `[respondWithPaymentRequired] 402 quote: market=${quote.market.slug} minutes=${quote.durationMinutes} amountAtomic=${quote.amountAtomic}`,
+    );
+    // Advertise x402 v2 so the client pays with the PAYMENT-SIGNATURE header the
+    // handler reads, instead of silently downgrading to v1/X-PAYMENT and having
+    // the payment dropped (see encodePaymentRequiredHeader).
+    context.header(
+      PAYMENT_REQUIRED_HEADER,
+      encodePaymentRequiredHeader(paymentRequiredResponse.body),
     );
     // x402 v2 body is { x402Version, error, accepts } (sourceRef: x402-solana
     // create402Response). Adding a sibling availability block is non-breaking:

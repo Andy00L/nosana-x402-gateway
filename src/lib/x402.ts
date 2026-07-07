@@ -17,6 +17,22 @@ export const buildX402Handler = (config: GatewayConfig): X402PaymentHandler =>
     defaultTimeoutSeconds: QUOTE_TIMEOUT_SECONDS,
   });
 
+// x402-solana's client (createPaymentFetch) upgrades to the v2 protocol, and so
+// sends its payment in the PAYMENT-SIGNATURE header the v2 server reads, ONLY
+// when the 402 response carries a PAYMENT-REQUIRED header. Without that header
+// the client silently downgrades to v1 and sends X-PAYMENT, which
+// X402PaymentHandler.extractPayment never reads (it reads PAYMENT-SIGNATURE
+// only), so the payment is dropped and the 402 repeats. Set this on every 402.
+//   sourceRef: x402-solana dist/client/index.js createPaymentFetch (branches on
+//   response.headers PAYMENT-REQUIRED); dist/server/index.js extractPayment.
+export const PAYMENT_REQUIRED_HEADER = "PAYMENT-REQUIRED";
+
+// Encode the payment-required body the same way @payai/x402 safeBase64Encode
+// does (standard base64 of the UTF-8 JSON) so the client's safeBase64Decode
+// (atob) round-trips it. sourceRef: @payai/x402 dist/.../utils safeBase64Encode.
+export const encodePaymentRequiredHeader = (paymentRequiredBody: unknown): string =>
+  Buffer.from(JSON.stringify(paymentRequiredBody), "utf8").toString("base64");
+
 // createPaymentRequirements calls the facilitator (getFeePayer) over the
 // network and throws on failure; wrap it so callers branch on a Result
 // instead of catching (errors as values, SKILL_GENERAL.md section 5).
