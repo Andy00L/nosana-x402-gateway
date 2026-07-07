@@ -18,7 +18,7 @@
   <img src="https://img.shields.io/badge/payments-USDC%20on%20Solana-9A5B13" alt="payments USDC on Solana">
   <img src="https://img.shields.io/badge/compute-Nosana%20credits%20API-25704F" alt="compute Nosana credits API">
   <img src="https://img.shields.io/badge/runtime-Bun%20%2B%20Hono-1C1917" alt="runtime Bun and Hono">
-  <img src="https://img.shields.io/badge/tests-89%20passing-25704F" alt="89 tests passing">
+  <img src="https://img.shields.io/badge/tests-100%20passing-25704F" alt="100 tests passing">
   <img src="https://img.shields.io/badge/license-MIT-736E64" alt="license MIT">
 </p>
 
@@ -71,6 +71,11 @@ stack.
   header it answers 402 with `PaymentRequirements` and a `PAYMENT-REQUIRED`
   header; with one it verifies, settles, provisions, and returns the job. See
   [src/routes/rent.ts](src/routes/rent.ts).
+- **Self-describing to an agent.** `GET /` returns the whole flow: both x402
+  headers, the ordered steps, and every endpoint. Each 402 carries a `hint` that
+  explains the challenge and names the header to resend, and each rent receipt
+  carries a `next` block. An agent orients from the responses, not the source.
+  See [src/lib/agentGuide.ts](src/lib/agentGuide.ts).
 - **Server-side pricing.** The quote is `usd_reward_per_hour` from the live
   markets API, prorated per minute in integer micro-USD (BigInt ceiling
   division, no floating point on money). Client-supplied prices do not exist.
@@ -109,7 +114,7 @@ sequenceDiagram
 
     Agent->>GW: POST /rent (market, minutes, job definition)
     GW->>Nos: read live market rate and on-chain queue
-    GW-->>Agent: 402 PaymentRequirements (amount, payTo, availability)
+    GW-->>Agent: 402 (PaymentRequirements amount/payTo, availability, hint)
     Agent->>Agent: sign USDC TransferChecked (partially signed)
     Agent->>GW: POST /rent with PAYMENT-SIGNATURE header
     GW->>Fac: verify payment
@@ -121,6 +126,13 @@ sequenceDiagram
     Nos-->>GW: job address (QUEUED, a host picks it up)
     GW-->>Agent: 200 (deployment id, session JWT, tx signature)
 ```
+
+The sequence above is the order; this is every field that crosses the wire, from
+the first request to the receipt:
+
+<p align="center">
+  <img src="docs/assets/payment-schema.svg" width="900" alt="The x402 rent exchange field by field: the POST /rent request body (market, duration_minutes, job_definition); the 402 response with x402 PaymentRequirements (amount, payTo, asset, network), an availability block, and a hint; the paid retry carrying the PAYMENT-SIGNATURE header with a signed USDC transfer; and the 200 receipt with deployment_id, a session JWT, the settlement tx, and next steps.">
+</p>
 
 The unhappy paths are where the design lives. A garbage or invalid payment is
 refused at verify, before any settle, with 402 and no money moved:
@@ -149,6 +161,7 @@ before verify, so money never moves toward capacity that is not there.
 | `GET /rent/:id` | session JWT | 200 status, timeout | 401 session, 502 lookup |
 | `POST /rent/:id/extend` | session JWT + x402 | 200 new timeout, session | as `POST /rent` plus 401 |
 | `POST /rent/:id/stop` | session JWT | 200 stopped | 401 session, 502 upstream |
+| `GET /` | none | 200 service and flow description | none |
 | `GET /markets` | none | 200 tiers with live rates and availability | 502 upstream |
 | `GET /health` | none | 200 | none |
 
@@ -203,7 +216,7 @@ curl -s -w "\nHTTP %{http_code}\n" -X POST localhost:3000/rent \
 The first call returns the live market list with an `availability` field per
 tier; the second returns `HTTP 402` with a body starting `{"x402Version":2` and
 an `amount` matching the market rate. `bun run typecheck` exits 0 on a clean
-clone, and `bun test` runs 89 unit tests. Every command here was run against this
+clone, and `bun test` runs 100 unit tests. Every command here was run against this
 revision.
 
 ## What is real and what is not
@@ -237,7 +250,8 @@ src/
   index.ts       entry point: config, wiring, on-chain availability adapter, refund scan
   config.ts      environment validation, crash early on bad config
   lib/           pricing, markets, availability, x402 wrappers, payment gauntlet,
-                 settlement store, sessions, credits provisioning, timeouts
+                 settlement store, sessions, credits provisioning, agent guide,
+                 timeouts
   routes/        rent (quote, pay, lifecycle), markets discovery, admin ledger
   *.test.ts      unit tests colocated with the modules they cover
 scripts/         agent-demo.ts, the mock x402 agent for the mainnet sign-off
