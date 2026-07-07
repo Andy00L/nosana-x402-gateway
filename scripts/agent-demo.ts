@@ -247,7 +247,15 @@ const runAgentDemo = async () => {
       );
     }
   } else {
-    recordStep("hit deployment endpoint", "FAIL", "deployment listed no endpoint URL");
+    // The credits rail does not surface a live service URL the way the
+    // deployment-manager did; a compute job returns its results by job id
+    // instead. That is a rail characteristic, not a gateway failure, so it does
+    // not fail the run.
+    recordStep(
+      "hit deployment endpoint",
+      "BLOCKED",
+      "credits-rail job exposes no service URL; fetch results by job id",
+    );
   }
 
   // Step 5: extend the rental (a second x402 payment).
