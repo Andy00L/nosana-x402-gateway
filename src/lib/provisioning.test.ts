@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { evaluateCreditsCoverage } from "./provisioning.js";
+import { evaluateCreditsCoverage, isUsableJobId } from "./provisioning.js";
 
 // Balance is USD dollars. 1 USD = 1_000_000 USDC atomic units, 1 cent = 10_000.
 describe("evaluateCreditsCoverage", () => {
@@ -69,5 +69,22 @@ describe("evaluateCreditsCoverage", () => {
       floorCents: 0,
     });
     expect(decision.ok).toBe(false);
+  });
+});
+
+describe("isUsableJobId", () => {
+  test("accepts a real credits-rail job address", () => {
+    expect(isUsableJobId("9H4bVD1vNRzAj2J7EVPajEcopMV46b4WUHyVR1YpV2Pj")).toBe(true);
+  });
+
+  test("rejects the empty and whitespace-only ids a broken create could return", () => {
+    expect(isUsableJobId("")).toBe(false);
+    expect(isUsableJobId("   ")).toBe(false);
+  });
+
+  test("rejects a missing or non-string id", () => {
+    expect(isUsableJobId(undefined)).toBe(false);
+    expect(isUsableJobId(null)).toBe(false);
+    expect(isUsableJobId(42)).toBe(false);
   });
 });

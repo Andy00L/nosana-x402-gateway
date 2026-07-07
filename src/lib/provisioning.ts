@@ -128,6 +128,17 @@ const describeJobState = (state: unknown): string => {
   }
 };
 
+// A credits-rail job id is the created job's on-chain account address. Guard
+// against a create call that reports success with no usable id: settle has
+// already moved money upstream by this point, so an empty or non-string id must
+// become a refund-owed provision failure, never a 200 with a blank
+// deployment_id that would hide the debt from the restart refund scan. Mirrors
+// the isPlausibleSignature guard in paymentFlow.ts; kept minimal (non-empty
+// string) so a real job whose id format is not a strict pubkey is never refunded
+// by mistake.
+export const isUsableJobId = (jobId: unknown): jobId is string =>
+  typeof jobId === "string" && jobId.trim().length > 0;
+
 const NOT_CONFIGURED_REASON =
   "gateway has no Nosana API key configured, so it cannot provision deployments";
 
@@ -237,7 +248,15 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
       });
     }
     // The job is listed (QUEUED); a node picks it up. There is no separate start
-    // call on the credits rail, and no service URL is returned.
+    // call on the credits rail, and no service URL is returned. Money already
+    // settled, so a create that returns no usable job id is recorded for refund,
+    // not returned as a broken success.
+    if (!isUsableJobId(created.job)) {
+      return err({
+        message: "credits job create reported success but returned no usable job id",
+        deploymentId: null,
+      });
+    }
     return ok({ deploymentId: created.job, status: "QUEUED", endpoints: [] });
   };
 

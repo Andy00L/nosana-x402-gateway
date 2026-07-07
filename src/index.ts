@@ -7,6 +7,7 @@ import { buildX402Handler } from "./lib/x402.js";
 import { createSettlementStore } from "./lib/settlementStore.js";
 import { createProvisioningService } from "./lib/provisioning.js";
 import { createAvailabilityService, type MarketQueueSource } from "./lib/availability.js";
+import { buildServiceDescription } from "./lib/agentGuide.js";
 import { ok, err } from "./lib/result.js";
 import { withTimeout } from "./lib/withTimeout.js";
 import { createRentRouter } from "./routes/rent.js";
@@ -95,6 +96,9 @@ app.use(
   }),
 );
 
+// Root discovery: the whole x402 rent flow on one page, so an agent can orient
+// (headers, ordered steps, every endpoint) before it makes any request.
+app.get("/", (context) => context.json(buildServiceDescription(config.x402Network)));
 app.get("/health", (context) => context.json({ status: "ok" }));
 app.route("/markets", createMarketsRouter(marketsService, availabilityService));
 app.route(

@@ -12,6 +12,7 @@ import {
   encodePaymentRequiredHeader,
 } from "../lib/x402.js";
 import { collectPayment } from "../lib/paymentFlow.js";
+import { buildPaymentChallengeHint, buildRentNextSteps } from "../lib/agentGuide.js";
 import type { SettlementStore } from "../lib/settlementStore.js";
 import type { ProvisioningService } from "../lib/provisioning.js";
 import { createRentSession, verifyRentSession } from "../lib/session.js";
@@ -140,13 +141,16 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
       encodePaymentRequiredHeader(paymentRequiredResponse.body),
     );
     // x402 v2 body is { x402Version, error, accepts } (sourceRef: x402-solana
-    // create402Response). Adding a sibling availability block is non-breaking:
-    // x402 clients read `accepts` and ignore unknown keys. Only the rent quote
-    // carries it; extend omits it because the host is already assigned to the
-    // running deployment.
-    const responseBody = availability
-      ? { ...paymentRequiredResponse.body, availability: formatAvailability(availability) }
-      : paymentRequiredResponse.body;
+    // create402Response). The sibling `hint` and `availability` blocks are
+    // non-breaking: the x402 client parses `accepts` and strips unknown keys, so
+    // only an agent reading the raw JSON sees them. `hint` makes the challenge
+    // self-describing on every 402; `availability` rides only the rent quote,
+    // since extend's host is already assigned to the running deployment.
+    const responseBody = {
+      ...paymentRequiredResponse.body,
+      hint: buildPaymentChallengeHint(),
+      ...(availability ? { availability: formatAvailability(availability) } : {}),
+    };
     return context.json(responseBody, 402);
   };
 
@@ -278,6 +282,9 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
         amount_atomic: quoteResult.value.amountAtomic,
         amount_usd: quoteResult.value.amountUsd,
       },
+      // Tell the agent how to drive the rental it just paid for (poll, extend,
+      // stop) and where results come from on the credits rail.
+      next: buildRentNextSteps(provisionResult.value.deploymentId),
     });
   });
 
