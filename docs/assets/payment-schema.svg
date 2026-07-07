@@ -36,7 +36,7 @@
   <!-- header -->
   <text class="mono eyebrow" x="66" y="66" font-size="12.5">NOSANA-X402-GATEWAY / PAYMENT SCHEMA</text>
   <text class="serif ctitle" x="65" y="106" font-size="30" font-weight="600">The x402 rent exchange, field by field</text>
-  <text class="sans csub" x="66" y="134" font-size="15">Four messages turn an agent&#39;s USDC into a running GPU job. Every field below is the real wire shape.</text>
+  <text class="sans csub" x="66" y="134" font-size="15">Four messages turn an agent&#39;s USDC into a running GPU job. Every field name and shape below is real; long values are shortened.</text>
   <line x1="66" y1="156" x2="1054" y2="156" stroke="#1c1917" stroke-opacity="0.08" stroke-width="1"/>
 
   <!-- sequence rail: four messages, disc colour = who speaks (ink agent, violet
@@ -87,7 +87,7 @@
   <text class="mono jnote" x="660" y="559" font-size="12.5">&#8592; the gateway treasury</text>
   <text class="mono" x="98" y="584" font-size="15"><tspan class="jpun">&#160;&#160;&#160;&#160;</tspan><tspan class="jkey">"network"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"solana"</tspan><tspan class="jpun">, </tspan><tspan class="jkey">"maxTimeoutSeconds"</tspan><tspan class="jpun">: </tspan><tspan class="jnum">300</tspan><tspan class="jpun"> } ],</tspan></text>
   <text class="mono" x="98" y="609" font-size="15"><tspan class="jpun">&#160;&#160;</tspan><tspan class="jkey">"availability"</tspan><tspan class="jpun">: { </tspan><tspan class="jkey">"status"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"nodes_available"</tspan><tspan class="jpun">,</tspan></text>
-  <text class="mono" x="98" y="634" font-size="15"><tspan class="jpun">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</tspan><tspan class="jkey">"nodes_available"</tspan><tspan class="jpun">: </tspan><tspan class="jnum">7</tspan><tspan class="jpun"> },</tspan></text>
+  <text class="mono" x="98" y="634" font-size="15"><tspan class="jpun">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</tspan><tspan class="jkey">"nodes_available"</tspan><tspan class="jpun">: </tspan><tspan class="jnum">7</tspan><tspan class="jpun"> },</tspan></text>
   <text class="mono jnote" x="660" y="634" font-size="12.5">&#8592; a host is idle: a paid job starts at once</text>
   <text class="mono" x="98" y="659" font-size="15"><tspan class="jpun">&#160;&#160;</tspan><tspan class="jkey">"hint"</tspan><tspan class="jpun">: { </tspan><tspan class="jkey">"payment_header"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"PAYMENT-SIGNATURE"</tspan><tspan class="jpun">,</tspan></text>
   <text class="mono" x="98" y="684" font-size="15"><tspan class="jpun">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</tspan><tspan class="jkey">"what"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"x402 challenge, not charged yet"</tspan><tspan class="jpun"> } }</tspan></text>
