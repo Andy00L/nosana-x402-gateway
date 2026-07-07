@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" width="1200" height="440" role="img" aria-label="An AI agent pays USDC over HTTP; the gateway verifies and settles the payment through the PayAI facilitator on Solana, then provisions a Nosana GPU job on credits.">
+  <defs>
+    <radialGradient id="field" cx="42%" cy="26%" r="95%">
+      <stop offset="0%" stop-color="#18233c"/>
+      <stop offset="62%" stop-color="#0d1526"/>
+      <stop offset="100%" stop-color="#080d18"/>
+    </radialGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#202c46"/>
+      <stop offset="100%" stop-color="#141d30"/>
+    </linearGradient>
+    <linearGradient id="cardHero" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#2a375420"/>
+      <stop offset="0%" stop-color="#2a3754"/>
+      <stop offset="100%" stop-color="#1a2338"/>
+    </linearGradient>
+    <radialGradient id="glowP" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#9945ff" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#9945ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowG" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="coinFace" cx="38%" cy="32%" r="72%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="42%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="ds" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#04060c" flood-opacity="0.55"/>
+    </filter>
+    <filter id="bloom" x="-160%" y="-160%" width="420%" height="420%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#5b6b88"/>
+    </marker>
+    <style>
+      .title { fill: #eef2fa; font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; font-size: 19px; font-weight: 600; }
+      .title-hero { fill: #ffffff; font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; font-size: 20px; font-weight: 600; }
+      .sub { fill: #94a3bd; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12.5px; }
+      .edge { fill: #6b7c9c; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px; }
+      .eyebrow { fill: #5f6f8c; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11.5px; letter-spacing: 2.6px; }
+      .legend { fill: #7c8bab; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11.5px; }
+      .wire { stroke: #33405c; stroke-width: 2; fill: none; }
+
+      .token { animation: travel 6.8s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+      .token-coin { animation: tint 6.8s cubic-bezier(0.4, 0, 0.2, 1) infinite; }
+      .settle-ring { transform-box: fill-box; transform-origin: center; opacity: 0; animation: settle 6.8s cubic-bezier(0.16, 1, 0.3, 1) infinite; }
+      .gpu-dot, .gpu-glow { transform-box: fill-box; transform-origin: center; animation: pulse 6.8s cubic-bezier(0.16, 1, 0.3, 1) infinite; }
+
+      @keyframes travel {
+        0%   { transform: translate(0,0);         opacity: 0; }
+        4%   { transform: translate(0,0);         opacity: 1; }
+        17%  { transform: translate(254px,0);     opacity: 1; }
+        27%  { transform: translate(254px,0);     opacity: 1; }
+        38%  { transform: translate(254px,152px); opacity: 1; }
+        50%  { transform: translate(254px,152px); opacity: 1; }
+        60%  { transform: translate(254px,0);     opacity: 1; }
+        74%  { transform: translate(577px,0);     opacity: 1; }
+        88%  { transform: translate(847px,0);     opacity: 1; }
+        95%  { transform: translate(847px,0);     opacity: 1; }
+        100% { transform: translate(847px,0);     opacity: 0; }
+      }
+      @keyframes tint {
+        0%, 27%   { fill: #9945ff; }
+        38%, 60%  { fill: #2f8cf0; }
+        74%, 100% { fill: #10c98f; }
+      }
+      @keyframes settle {
+        0%, 38%  { opacity: 0; transform: scale(0.55); }
+        44%      { opacity: 0.85; transform: scale(1); }
+        56%      { opacity: 0; transform: scale(1.5); }
+        100%     { opacity: 0; }
+      }
+      @keyframes pulse {
+        0%, 82% { opacity: 0.32; transform: scale(1); }
+        90%     { opacity: 1; transform: scale(1.18); }
+        100%    { opacity: 0.32; transform: scale(1); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .token { animation: none; transform: translate(254px,152px); }
+        .token-coin { animation: none; fill: #2f8cf0; }
+        .settle-ring { animation: none; opacity: 0.7; }
+        .gpu-dot, .gpu-glow { animation: none; opacity: 1; }
+      }
+    </style>
+  </defs>
+
+  <rect width="1200" height="440" rx="22" fill="url(#field)"/>
+  <ellipse cx="486" cy="196" rx="300" ry="190" fill="url(#glowP)"/>
+  <ellipse cx="1079" cy="200" rx="170" ry="140" fill="url(#glowG)"/>
+
+  <text class="eyebrow" x="56" y="46">HOW A USDC PAYMENT BECOMES GPU COMPUTE</text>
+
+  <!-- legend, top right -->
+  <g>
+    <circle cx="806" cy="42" r="4.5" fill="#9945ff"/>
+    <text class="legend" x="817" y="46">pay</text>
+    <circle cx="866" cy="42" r="4.5" fill="#2f8cf0"/>
+    <text class="legend" x="877" y="46">settle</text>
+    <circle cx="948" cy="42" r="4.5" fill="#10c98f"/>
+    <text class="legend" x="959" y="46">compute</text>
+  </g>
+
+  <!-- wires under the nodes -->
+  <line class="wire" x1="270" y1="200" x2="352" y2="200" marker-end="url(#arrow)"/>
+  <line class="wire" x1="486" y1="276" x2="486" y2="314" marker-end="url(#arrow)"/>
+  <line class="wire" x1="612" y1="200" x2="694" y2="200" marker-end="url(#arrow)"/>
+  <line class="wire" x1="916" y1="200" x2="998" y2="200" marker-end="url(#arrow)"/>
+
+  <text class="edge" x="278" y="190">POST /rent</text>
+  <text class="edge" x="498" y="302">verify + settle</text>
+  <text class="edge" x="620" y="190">pin + jobs.list</text>
+  <text class="edge" x="936" y="190">run</text>
+
+  <!-- settle pulse at the facilitator -->
+  <circle class="settle-ring" cx="486" cy="352" r="24" fill="none" stroke="#2f8cf0" stroke-width="2"/>
+
+  <!-- nodes -->
+  <g filter="url(#ds)">
+    <rect x="56" y="140" width="214" height="120" rx="15" fill="url(#card)" stroke="#9d5cff" stroke-width="1.5"/>
+  </g>
+  <text class="title" x="80" y="196">AI agent</text>
+  <text class="sub" x="80" y="222">USDC wallet, HTTP</text>
+
+  <g filter="url(#ds)">
+    <rect x="360" y="124" width="252" height="152" rx="16" fill="url(#cardHero)" stroke="#c8d3e6" stroke-width="1.5"/>
+  </g>
+  <text class="title-hero" x="386" y="190">x402 gateway</text>
+  <text class="sub" x="386" y="218">price / settle / provision</text>
+
+  <g filter="url(#ds)">
+    <rect x="702" y="140" width="214" height="120" rx="15" fill="url(#card)" stroke="#14c99b" stroke-width="1.5"/>
+  </g>
+  <text class="title" x="726" y="196">Nosana credits</text>
+  <text class="sub" x="726" y="222">jobs.list, GPU node</text>
+
+  <g filter="url(#ds)">
+    <rect x="1006" y="140" width="146" height="120" rx="15" fill="url(#card)" stroke="#14c99b" stroke-width="1.5"/>
+  </g>
+  <text class="title" x="1030" y="192">GPU</text>
+  <circle class="gpu-glow" cx="1036" cy="215" r="9" fill="#10c98f" filter="url(#bloom)"/>
+  <circle class="gpu-dot" cx="1036" cy="215" r="5" fill="#3ce9b6"/>
+  <text class="sub" x="1050" y="220">running</text>
+
+  <g filter="url(#ds)">
+    <rect x="360" y="320" width="252" height="64" rx="13" fill="url(#card)" stroke="#3f8ff0" stroke-width="1.5"/>
+  </g>
+  <text class="title" x="386" y="356">PayAI facilitator</text>
+  <text class="sub" x="386" y="375">settles USDC on Solana</text>
+
+  <!-- hero coin: one token that travels the pipe and changes color as it settles then becomes compute -->
+  <g class="token">
+    <circle class="token-coin" cx="232" cy="200" r="11" fill="#9945ff"/>
+    <circle cx="232" cy="200" r="11" fill="url(#coinFace)"/>
+    <circle cx="232" cy="200" r="4.6" fill="none" stroke="#0b1120" stroke-width="2"/>
+  </g>
+</svg>

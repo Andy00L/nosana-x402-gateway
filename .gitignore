@@ -16,9 +16,11 @@ data/
 .scratch/
 
 # internal strategy and planning docs stay local, not in the public repo.
-# Published sign-off evidence under docs/evidence/ is the exception.
+# Published sign-off evidence under docs/evidence/ and the README assets under
+# docs/assets/ are the exceptions.
 docs/*
 !docs/evidence/
+!docs/assets/
 
 # logs
 *.log
