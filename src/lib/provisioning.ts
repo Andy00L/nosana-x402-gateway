@@ -1,9 +1,4 @@
-import {
-  createNosanaClient,
-  isNosanaApiError,
-  DeploymentStrategy,
-  type JobDefinition,
-} from "@nosana/kit";
+import { createNosanaClient, isNosanaApiError, type JobDefinition } from "@nosana/kit";
 import { type Result, ok, err } from "./result.js";
 import { withTimeout as withTimeoutForCall } from "./withTimeout.js";
 import type { GatewayConfig } from "../config.js";
@@ -47,15 +42,19 @@ export const evaluateCreditsCoverage = (params: {
   return ok(undefined);
 };
 
+// The result of a successful provision. deploymentId is the credits-rail job
+// address. endpoints is empty on the credits rail: unlike the deployment-manager
+// it does not surface a live service URL, so a caller reaches results by job id.
 export interface ProvisionedDeployment {
   readonly deploymentId: string;
   readonly status: string;
   readonly endpoints: { opId: string; port: number | string; url: string }[];
 }
 
-// A provisioning failure carries the deployment id when one was created before
-// the failure (start failed after a successful create), so the refund/recovery
-// path can find and stop the orphaned deployment (audit H3).
+// A provisioning failure. On the credits rail one jobs.list call posts the job
+// atomically, so there is no "created but not started" orphan to hand back and
+// deploymentId is null. The field is kept because the refund path records it
+// (audit H3) and a future recovery could carry a job id here.
 export interface ProvisionFailure {
   readonly message: string;
   readonly deploymentId: string | null;
@@ -106,6 +105,28 @@ const describeApiError = (unknownError: unknown): string => {
 const NOSANA_CALL_TIMEOUT_MS = 60_000;
 const withTimeout = <OperationResult>(operation: Promise<OperationResult>, label: string) =>
   withTimeoutForCall(operation, label, NOSANA_CALL_TIMEOUT_MS);
+
+// The credits rail expresses job timeouts in seconds; the gateway works in whole
+// minutes. sourceRef: client-manager postJobsList/postJobsByAddressExtend
+// ("Job timeout in seconds", "Number of seconds to extend the job").
+const SECONDS_PER_MINUTE = 60;
+
+// Credits-API job state is a number. sourceRef: live client.api.jobs.get shape
+// and @nosana/kit JobState (QUEUED=0, RUNNING=1, COMPLETED=2, STOPPED=3).
+const describeJobState = (state: unknown): string => {
+  switch (state) {
+    case 0:
+      return "QUEUED";
+    case 1:
+      return "RUNNING";
+    case 2:
+      return "COMPLETED";
+    case 3:
+      return "STOPPED";
+    default:
+      return "UNKNOWN";
+  }
+};
 
 const NOT_CONFIGURED_REASON =
   "gateway has no Nosana API key configured, so it cannot provision deployments";
@@ -159,67 +180,76 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
     });
   };
 
+  // Map the untyped credits-API job record to a lifecycle snapshot. The credits
+  // rail returns no service endpoints (unlike the deployment-manager) and its
+  // timeout is in seconds. sourceRef: live client.api.jobs.get fields (state,
+  // timeout, market).
+  const mapJobRecordToSnapshot = (
+    deploymentId: string,
+    jobRecord: Record<string, unknown>,
+  ): DeploymentSnapshot => {
+    const timeoutSeconds = typeof jobRecord.timeout === "number" ? jobRecord.timeout : 0;
+    const marketAddress = typeof jobRecord.market === "string" ? jobRecord.market : "";
+    return {
+      deploymentId,
+      status: describeJobState(jobRecord.state),
+      endpoints: [],
+      timeoutMinutes: Math.ceil(timeoutSeconds / SECONDS_PER_MINUTE),
+      marketAddress,
+    };
+  };
+
   const provisionDeployment: ProvisioningService["provisionDeployment"] = async (request) => {
-    // Deployment name carries the payment key prefix so any deployment can be
-    // traced back to the payment that funded it.
-    const deploymentName = `x402-${request.paymentKey.slice(0, 12)}`;
-    let deployment: Awaited<ReturnType<typeof nosanaClient.api.deployments.create>>;
+    // The credits rail posts a job by IPFS hash, so the job definition is pinned
+    // first. sourceRef: client-manager postJobsList requestBody { ipfsHash,
+    // market, timeout }.
+    let ipfsHash: string;
     try {
-      deployment = await withTimeout(
-        nosanaClient.api.deployments.create({
-          name: deploymentName,
-          market: request.marketAddress,
-          replicas: 1,
-          // Timeout is in minutes (sourceRef: @nosana/api deployment-manager
-          // schema DeploymentCreateBody).
-          timeout: request.durationMinutes,
-          strategy: DeploymentStrategy.SIMPLE,
-          job_definition: request.jobDefinition,
-        }),
-        "deployments.create",
-      );
-    } catch (createError) {
-      // No deployment was created, so there is nothing to recover.
+      ipfsHash = await withTimeout(nosanaClient.ipfs.pin(request.jobDefinition), "ipfs.pin");
+    } catch (pinError) {
+      // Nothing was posted, so there is nothing to recover.
       return err({
-        message: `deployment create failed: ${describeApiError(createError)}`,
+        message: `job definition IPFS pin failed: ${describeApiError(pinError)}`,
         deploymentId: null,
       });
     }
+    // Post the job to the market, charged to the gateway's credits (Bearer nos_
+    // API key). timeout is in SECONDS here, unlike the deployment-manager which
+    // used minutes. sourceRef: client-manager postJobsList ("Job timeout in
+    // seconds"); CreateJobWithCreditsResponse returns { tx, job, run, credits }.
+    let created: Awaited<ReturnType<typeof nosanaClient.api.jobs.list>>;
     try {
-      await withTimeout(deployment.start(), "deployment.start");
-    } catch (startError) {
-      // The deployment exists but did not start: return its id so the
-      // refund/recovery path can find and stop it (audit H3).
+      created = await withTimeout(
+        nosanaClient.api.jobs.list({
+          ipfsHash,
+          market: request.marketAddress,
+          timeout: request.durationMinutes * SECONDS_PER_MINUTE,
+        }),
+        "jobs.list",
+      );
+    } catch (listError) {
+      // A transport failure here MAY still have posted the job. The gateway does
+      // not auto-retry, so it records a refund owed rather than risk a double
+      // post; a job that did land auto-stops at its timeout.
       return err({
-        message: `deployment start failed after create: ${describeApiError(startError)}`,
-        deploymentId: deployment.id,
+        message: `credits job create failed: ${describeApiError(listError)}`,
+        deploymentId: null,
       });
     }
-    return ok({
-      deploymentId: deployment.id,
-      status: deployment.status,
-      endpoints: deployment.endpoints,
-    });
+    // The job is listed (QUEUED); a node picks it up. There is no separate start
+    // call on the credits rail, and no service URL is returned.
+    return ok({ deploymentId: created.job, status: "QUEUED", endpoints: [] });
   };
-
-  const fetchDeploymentHandle = async (deploymentId: string) =>
-    withTimeout(nosanaClient.api.deployments.get(deploymentId), "deployments.get");
-
-  const mapDeploymentToSnapshot = (
-    deployment: Awaited<ReturnType<typeof fetchDeploymentHandle>>,
-  ): DeploymentSnapshot => ({
-    deploymentId: deployment.id,
-    status: deployment.status,
-    endpoints: deployment.endpoints,
-    timeoutMinutes: deployment.timeout,
-    marketAddress: deployment.market,
-  });
 
   const getDeployment: ProvisioningService["getDeployment"] = async (deploymentId) => {
     try {
-      return ok(mapDeploymentToSnapshot(await fetchDeploymentHandle(deploymentId)));
+      const jobRecord = (await withTimeout(
+        nosanaClient.api.jobs.get(deploymentId),
+        "jobs.get",
+      )) as Record<string, unknown>;
+      return ok(mapJobRecordToSnapshot(deploymentId, jobRecord));
     } catch (getError) {
-      return err(`deployment lookup failed: ${describeApiError(getError)}`);
+      return err(`job lookup failed: ${describeApiError(getError)}`);
     }
   };
 
@@ -227,49 +257,42 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
     deploymentId,
     additionalMinutes,
   ) => {
-    let deployment: Awaited<ReturnType<typeof fetchDeploymentHandle>>;
+    // extend adds seconds to the job's timeout and charges the extension to
+    // credits. sourceRef: client-manager postJobsByAddressExtend { seconds }.
     try {
-      deployment = await fetchDeploymentHandle(deploymentId);
-    } catch (getError) {
-      return err(`deployment lookup failed: ${describeApiError(getError)}`);
+      await withTimeout(
+        nosanaClient.api.jobs.extend({
+          address: deploymentId,
+          seconds: additionalMinutes * SECONDS_PER_MINUTE,
+        }),
+        "jobs.extend",
+      );
+    } catch (extendError) {
+      return err(`job extend failed: ${describeApiError(extendError)}`);
     }
-    // updateTimeout sets the TOTAL timeout in minutes, so extending means
-    // current timeout plus the paid extension (sourceRef: @nosana/api
-    // ApiDeployment.updateTimeout and DeploymentCreateBody.timeout).
-    const newTotalTimeout = deployment.timeout + additionalMinutes;
-    try {
-      await withTimeout(deployment.updateTimeout(newTotalTimeout), "deployment.updateTimeout");
-    } catch (updateError) {
-      return err(`deployment extend failed: ${describeApiError(updateError)}`);
-    }
-    // updateTimeout is the commit point: the extension is applied. A failure to
-    // re-read fresh state must NOT be reported as an extend failure, that would
-    // refund an extension the renter already received (audit M2). Fall back to
-    // a snapshot built from the just-applied timeout.
+    // extend is the commit point: the extension is applied and charged. A failure
+    // to re-read fresh state must NOT be reported as an extend failure, that
+    // would refund an extension the renter already received (audit M2). Fall back
+    // to a minimal snapshot that at least carries the added minutes.
     const refreshed = await getDeployment(deploymentId);
     if (refreshed.ok) {
       return refreshed;
     }
     return ok({
       deploymentId,
-      status: deployment.status,
-      endpoints: deployment.endpoints,
-      timeoutMinutes: newTotalTimeout,
-      marketAddress: deployment.market,
+      status: "RUNNING",
+      endpoints: [],
+      timeoutMinutes: additionalMinutes,
+      marketAddress: "",
     });
   };
 
   const stopDeployment: ProvisioningService["stopDeployment"] = async (deploymentId) => {
-    let deployment: Awaited<ReturnType<typeof fetchDeploymentHandle>>;
+    // sourceRef: client-manager postJobsByAddressStop (takes the job address).
     try {
-      deployment = await fetchDeploymentHandle(deploymentId);
-    } catch (getError) {
-      return err(`deployment lookup failed: ${describeApiError(getError)}`);
-    }
-    try {
-      await withTimeout(deployment.stop(), "deployment.stop");
+      await withTimeout(nosanaClient.api.jobs.stop(deploymentId), "jobs.stop");
     } catch (stopError) {
-      return err(`deployment stop failed: ${describeApiError(stopError)}`);
+      return err(`job stop failed: ${describeApiError(stopError)}`);
     }
     return getDeployment(deploymentId);
   };
