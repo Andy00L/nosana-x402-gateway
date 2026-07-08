@@ -47,14 +47,15 @@ export interface RentNextSteps {
 }
 
 // Added to a successful rent receipt so the agent knows how to drive the rental
-// it just paid for. The results line names the one non-obvious property of the
-// credits rail: a job returns results by id, not at a live service URL.
+// it just paid for. The results line names the two ways output comes back on
+// the credits rail: a live URL per exposed port (in endpoints[]), and batch
+// results by job id.
 export const buildRentNextSteps = (deploymentId: string): RentNextSteps => ({
   status: `GET /rent/${deploymentId} with header "Authorization: Bearer <session>" to poll status and timeout_minutes.`,
   extend: `POST /rent/${deploymentId}/extend {"duration_minutes": N} to add time (another x402 payment).`,
   stop: `POST /rent/${deploymentId}/stop with the session to end the rental.`,
   results:
-    "This is a Nosana credits-rail job: results come back by job id (this deployment_id); there is no live service URL to hit.",
+    "If the job definition exposes a port, endpoints[] carries its live service URL (answers once status is RUNNING). Batch results come back by job id (this deployment_id).",
 });
 
 export interface ServiceDescription {

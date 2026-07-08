@@ -37,9 +37,10 @@ describe("buildRentNextSteps", () => {
     expect(next.stop).toContain("POST /rent/9H4bVD1v/stop");
   });
 
-  test("warns that results come by job id, not a live URL", () => {
+  test("explains both result paths: the endpoints URL and results by job id", () => {
     const next = buildRentNextSteps("job-address");
-    expect(next.results.toLowerCase()).toContain("no live service url");
+    expect(next.results).toContain("endpoints[]");
+    expect(next.results.toLowerCase()).toContain("by job id");
   });
 });
 

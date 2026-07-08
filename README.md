@@ -41,16 +41,17 @@ The whole loop, run end to end against Nosana mainnet with the mock agent in
 
 ```console
 $ bun run scripts/agent-demo.ts        # AGENT_X402_NETWORK=solana, market nvidia-3060
-PASS    discover markets       46 markets, using "nvidia-3060"
-PASS    rent (pay 402)         deployment=9H4bVD1v... paid=0.003634 USD tx=3dkKwc4B...
-PASS    poll until running     RUNNING
-BLOCKED hit deployment endpoint credits-rail job exposes no service URL
-PASS    extend (pay 402)       new timeout=10 minutes tx=3hGVh8sc...
-PASS    stop                   final status=COMPLETED
+PASS    discover markets         46 markets, using "nvidia-3060"
+PASS    rent (pay 402)           deployment=2QBkNYeF... paid=0.003634 USD tx=4nVCqPSq...
+PASS    poll until running       RUNNING, endpoint=https://42YDVK63....node.k8s.prd.nos.ci
+PASS    hit deployment endpoint  HTTP 200 from https://42YDVK63....node.k8s.prd.nos.ci
+PASS    extend (pay 402)         new timeout=10 minutes tx=2BJmQebi...
+PASS    stop                     final status=COMPLETED
 ```
 
-An agent holding only USDC and speaking plain HTTP paid for a GPU, ran a job,
-paid again to extend it, and stopped it. Links under [Live on Solana mainnet](#live-on-solana-mainnet).
+An agent holding only USDC and speaking plain HTTP paid for a GPU, ran a web
+service on it, called that service over HTTPS, paid again to extend it, and
+stopped it. Links under [Live on Solana mainnet](#live-on-solana-mainnet).
 
 ## The problem
 
@@ -91,6 +92,12 @@ stack.
 - **Credits-rail provisioning.** The job is pinned to IPFS, then posted with
   `jobs.list` on the credits API; the operator's credits pay the host. See
   [src/lib/provisioning.ts](src/lib/provisioning.ts).
+- **Service URLs derived, not asked for.** The credits API returns no endpoint
+  field, but the URL of every exposed port is deterministic (the expose-id hash
+  of op index, port, and job address, the same derivation nosana-cli uses). The
+  gateway derives it and returns it in `endpoints[]` on the receipt and status;
+  it answers once the job is RUNNING. See
+  [src/lib/serviceEndpoints.ts](src/lib/serviceEndpoints.ts).
 - **Replay protection.** A SQLite ledger keyed by the SHA-256 of the payment
   header, with a UNIQUE constraint on the settled transaction signature; the
   reservation insert is the atomic check-and-set. See
@@ -167,13 +174,16 @@ before verify, so money never moves toward capacity that is not there.
 
 ## Live on Solana mainnet
 
-The full rent, run, extend, stop loop, executed end to end on 2026-07-06:
+The full rent, run, call the service, extend, stop loop, executed end to end on
+2026-07-08 (first signed off 2026-07-06, re-run after wiring the derived
+service URLs):
 
 | Step | Result | Proof |
 | --- | --- | --- |
-| Rent, pay 402 | 0.003634 USDC settled | tx [3dkKwc4B](https://solscan.io/tx/3dkKwc4BtirCXgoerhpHeLejTg7SHQQPCCXpHhzF6qkjkndia3MDhezPkckqG5RHjspQWfeSascUywSfXCHj7K1s) |
-| Provision on credits | job posted, reached RUNNING | job [9H4bVD1v](https://solscan.io/account/9H4bVD1vNRzAj2J7EVPajEcopMV46b4WUHyVR1YpV2Pj) |
-| Extend, 2nd payment | timeout 5 to 10 minutes | tx [3hGVh8sc](https://solscan.io/tx/3hGVh8scMP5JXdKqrhXXhWTrQRUKJqupkPMszRZxyBGRHn2xnkVweV5o8TtCAiRxgdu6RQAbRYZ1nQmXdGnY46Jk) |
+| Rent, pay 402 | 0.003634 USDC settled | tx [4nVCqPSq](https://solscan.io/tx/4nVCqPSq28qcVcbBCYEK84DfKThMdy5JGeofW9r3dMrDprLjS8j6NQBtabR3GewiXtRMpttKUtrHeYJwubTPJ3TE) |
+| Provision on credits | job posted, reached RUNNING | job [2QBkNYeF](https://solscan.io/account/2QBkNYeFY7wrfai5M7Wassy3mymTokFZTuAPiFCkU175) |
+| Call the rented service | HTTP 200 from the derived URL | endpoint `https://42YDVK63cc1kb2PBQ2NFPzEdFGiyqtaG4z29J1Kybsru.node.k8s.prd.nos.ci` |
+| Extend, 2nd payment | timeout 5 to 10 minutes | tx [2BJmQebi](https://solscan.io/tx/2BJmQebiZ6Snk6dzbycDva2yawh6RFxapimirc5nqyPJHsyfhFSr1H6w4FNFjf8qbRdPAf9mZU3eEGirHF4zQFVw) |
 | Stop | final status COMPLETED | run log above |
 
 `GET /markets` on mainnet returns 47 tiers, each with the queue read from chain.
@@ -216,7 +226,7 @@ curl -s -w "\nHTTP %{http_code}\n" -X POST localhost:3000/rent \
 The first call returns the live market list with an `availability` field per
 tier; the second returns `HTTP 402` with a body starting `{"x402Version":2` and
 an `amount` matching the market rate. `bun run typecheck` exits 0 on a clean
-clone, and `bun test` runs 100 unit tests. Every command here was run against this
+clone, and `bun test` runs 107 unit tests. Every command here was run against this
 revision.
 
 ## What is real and what is not
@@ -224,11 +234,12 @@ revision.
 - **The money-moving loop is signed off on mainnet.** Rent, run, extend, and
   stop all ran with real USDC and credits (transactions above). The rest below
   is stated plainly.
-- **The credits rail exposes no live service URL.** A compute job returns
-  results by job id through IPFS; a service job that exposes a port (the nginx
-  demo) gets no reachable URL the way the deployment manager did, so the demo
-  marks that step blocked. Surfacing service URLs on the credits rail is an open
-  question for the Nosana team.
+- **Service URLs rest on an undocumented derivation.** The credits API returns
+  no endpoint field, so the gateway derives each exposed port's URL with the
+  expose-id hash nosana-cli uses internally. It is verified working on mainnet
+  (HTTP 200 above), but it is not a documented contract; whether it is stable
+  is a question open with the Nosana team. Batch results still come back by job
+  id through IPFS.
 - **Refunds are recorded, not sent.** The ledger and startup scan name every
   refund owed with its tx; automated refunds need the treasury hot wallet and a
   security review. One refund of 0.000727 USDC is outstanding.

@@ -22,6 +22,11 @@ const DEVNET_USDC_FAUCET_URL = "https://faucet.circle.com";
 // Poll cadence and ceiling for waiting on a deployment to reach RUNNING.
 const POLL_INTERVAL_MS = 10_000;
 const POLL_TIMEOUT_MS = 300_000;
+// Retry window for the exposed service URL after RUNNING: the FRP tunnel on
+// the GPU host registers moments after the job state flips (observed ~10s on
+// mainnet, 2026-07-08).
+const ENDPOINT_RETRY_INTERVAL_MS = 5_000;
+const ENDPOINT_RETRY_TIMEOUT_MS = 90_000;
 
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3000";
 const AGENT_DURATION_MINUTES = Number.parseInt(
@@ -234,27 +239,39 @@ const runAgentDemo = async () => {
   }
   recordStep("poll until running", "PASS", `RUNNING, endpoint=${endpointUrl || "(none listed)"}`);
 
-  // Step 4: prove the rented compute answers HTTP.
+  // Step 4: prove the rented compute answers HTTP. The FRP tunnel can register
+  // a few seconds after the job reports RUNNING, so a 5xx is retried briefly
+  // instead of failing the step on the first probe.
   if (endpointUrl) {
-    try {
-      const endpointResponse = await fetch(endpointUrl);
-      recordStep("hit deployment endpoint", "PASS", `HTTP ${endpointResponse.status} from ${endpointUrl}`);
-    } catch (endpointError) {
-      recordStep(
-        "hit deployment endpoint",
-        "FAIL",
-        `unreachable: ${endpointError instanceof Error ? endpointError.message : String(endpointError)}`,
-      );
+    const endpointDeadline = Date.now() + ENDPOINT_RETRY_TIMEOUT_MS;
+    let lastEndpointDetail = "";
+    let hasEndpointAnswered = false;
+    while (Date.now() < endpointDeadline && !hasEndpointAnswered) {
+      try {
+        const endpointResponse = await fetch(endpointUrl);
+        lastEndpointDetail = `HTTP ${endpointResponse.status} from ${endpointUrl}`;
+        if (endpointResponse.status < 500) {
+          hasEndpointAnswered = true;
+          break;
+        }
+      } catch (endpointError) {
+        lastEndpointDetail = `unreachable: ${endpointError instanceof Error ? endpointError.message : String(endpointError)}`;
+      }
+      console.log(`[agentDemo] endpoint not up yet (${lastEndpointDetail}), retrying`);
+      await waitMilliseconds(ENDPOINT_RETRY_INTERVAL_MS);
     }
+    recordStep(
+      "hit deployment endpoint",
+      hasEndpointAnswered ? "PASS" : "FAIL",
+      lastEndpointDetail,
+    );
   } else {
-    // The credits rail does not surface a live service URL the way the
-    // deployment-manager did; a compute job returns its results by job id
-    // instead. That is a rail characteristic, not a gateway failure, so it does
-    // not fail the run.
+    // The gateway derives an endpoint for every exposed port, so an empty list
+    // means this job definition exposes none. Not a failure of the flow.
     recordStep(
       "hit deployment endpoint",
       "BLOCKED",
-      "credits-rail job exposes no service URL; fetch results by job id",
+      "job definition exposes no port, so there is no service URL; fetch results by job id",
     );
   }
 

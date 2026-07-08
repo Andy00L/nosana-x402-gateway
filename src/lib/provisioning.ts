@@ -1,6 +1,11 @@
 import { createNosanaClient, isNosanaApiError, type JobDefinition } from "@nosana/kit";
 import { type Result, ok, err } from "./result.js";
 import { withTimeout as withTimeoutForCall } from "./withTimeout.js";
+import {
+  deriveServiceEndpoints,
+  deriveServiceEndpointsFromRecord,
+  type ServiceEndpoint,
+} from "./serviceEndpoints.js";
 import type { GatewayConfig } from "../config.js";
 import type { RentQuote } from "./pricing.js";
 
@@ -43,12 +48,14 @@ export const evaluateCreditsCoverage = (params: {
 };
 
 // The result of a successful provision. deploymentId is the credits-rail job
-// address. endpoints is empty on the credits rail: unlike the deployment-manager
-// it does not surface a live service URL, so a caller reaches results by job id.
+// address. The credits API returns no endpoint field, so endpoints are derived
+// locally from the job definition's exposed ports (see serviceEndpoints.ts);
+// each URL answers once the job reaches RUNNING. Batch results still come back
+// by job id.
 export interface ProvisionedDeployment {
   readonly deploymentId: string;
   readonly status: string;
-  readonly endpoints: { opId: string; port: number | string; url: string }[];
+  readonly endpoints: ServiceEndpoint[];
 }
 
 // A provisioning failure. On the credits rail one jobs.list call posts the job
@@ -72,7 +79,7 @@ export interface ProvisionRequest {
 export interface DeploymentSnapshot {
   readonly deploymentId: string;
   readonly status: string;
-  readonly endpoints: { opId: string; port: number | string; url: string }[];
+  readonly endpoints: ServiceEndpoint[];
   readonly timeoutMinutes: number;
   readonly marketAddress: string;
 }
@@ -191,10 +198,10 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
     });
   };
 
-  // Map the untyped credits-API job record to a lifecycle snapshot. The credits
-  // rail returns no service endpoints (unlike the deployment-manager) and its
+  // Map the untyped credits-API job record to a lifecycle snapshot. The record
+  // carries no endpoint field, so endpoints are derived from its jobDefinition;
   // timeout is in seconds. sourceRef: live client.api.jobs.get fields (state,
-  // timeout, market).
+  // timeout, market, jobDefinition).
   const mapJobRecordToSnapshot = (
     deploymentId: string,
     jobRecord: Record<string, unknown>,
@@ -204,7 +211,11 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
     return {
       deploymentId,
       status: describeJobState(jobRecord.state),
-      endpoints: [],
+      endpoints: deriveServiceEndpointsFromRecord(
+        jobRecord.jobDefinition,
+        deploymentId,
+        config.nosanaNetwork,
+      ),
       timeoutMinutes: Math.ceil(timeoutSeconds / SECONDS_PER_MINUTE),
       marketAddress,
     };
@@ -248,16 +259,23 @@ export const createProvisioningService = (config: GatewayConfig): ProvisioningSe
       });
     }
     // The job is listed (QUEUED); a node picks it up. There is no separate start
-    // call on the credits rail, and no service URL is returned. Money already
-    // settled, so a create that returns no usable job id is recorded for refund,
-    // not returned as a broken success.
+    // call on the credits rail. Money already settled, so a create that returns
+    // no usable job id is recorded for refund, not returned as a broken success.
     if (!isUsableJobId(created.job)) {
       return err({
         message: "credits job create reported success but returned no usable job id",
         deploymentId: null,
       });
     }
-    return ok({ deploymentId: created.job, status: "QUEUED", endpoints: [] });
+    return ok({
+      deploymentId: created.job,
+      status: "QUEUED",
+      endpoints: deriveServiceEndpoints(
+        request.jobDefinition,
+        created.job,
+        config.nosanaNetwork,
+      ),
+    });
   };
 
   const getDeployment: ProvisioningService["getDeployment"] = async (deploymentId) => {
