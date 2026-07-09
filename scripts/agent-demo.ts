@@ -284,7 +284,15 @@ const runAgentDemo = async () => {
   const extendBody = await readJsonBody(extendResponse);
   if (extendResponse.status === 200) {
     session = typeof extendBody.session === "string" ? extendBody.session : session;
-    recordStep("extend (pay 402)", "PASS", `new timeout=${String(extendBody.timeout_minutes)} minutes`);
+    const extendPayment =
+      typeof extendBody.payment === "object" && extendBody.payment !== null
+        ? (extendBody.payment as Record<string, unknown>)
+        : {};
+    recordStep(
+      "extend (pay 402)",
+      "PASS",
+      `new timeout=${String(extendBody.timeout_minutes)} minutes tx=${String(extendPayment.tx_signature)}`,
+    );
   } else {
     recordStep("extend (pay 402)", "FAIL", `status=${extendResponse.status} body=${JSON.stringify(extendBody).slice(0, 160)}`);
   }

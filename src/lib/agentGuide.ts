@@ -89,15 +89,15 @@ export const buildServiceDescription = (
   flow: [
     "1. GET /markets lists GPU tiers with their live USD/hour rate and current queue availability.",
     "2. POST /rent {market, duration_minutes, job_definition} answers 402 with x402 PaymentRequirements (amount, payTo) plus an availability block.",
-    "3. Sign a USDC transfer for that amount and POST /rent again with the PAYMENT-SIGNATURE header: the gateway verifies, settles on Solana, provisions the job, and returns 200 with deployment_id, a session JWT, and the settlement tx.",
-    "4. GET /rent/:id with the session polls status and timeout_minutes.",
+    "3. Sign a USDC transfer for that amount and POST /rent again with the PAYMENT-SIGNATURE header: the gateway verifies, settles on Solana, provisions the job, and returns 200 with deployment_id, endpoints[] (a live URL per exposed port), a session JWT, and the settlement tx.",
+    "4. GET /rent/:id with the session polls status, endpoints, and timeout_minutes.",
     "5. POST /rent/:id/extend adds time (another payment); POST /rent/:id/stop ends the rental.",
   ],
   endpoints: {
     "GET /health": "liveness check, no auth.",
     "GET /markets": "GPU tiers with live rate and availability, no auth.",
     "POST /rent": "x402-paid: rent a GPU (answers 402 until paid).",
-    "GET /rent/:id": "session-auth: deployment status and timeout.",
+    "GET /rent/:id": "session-auth: deployment status, endpoints, and timeout.",
     "POST /rent/:id/extend": "x402-paid and session-auth: add minutes.",
     "POST /rent/:id/stop": "session-auth: stop the rental.",
   },

@@ -121,7 +121,18 @@ console.log(
   `[startGateway] nosana-x402-gateway on port ${config.port}: network=${config.x402Network} facilitator=${config.facilitatorUrl} payTo=${config.treasuryAddress}`,
 );
 
+// Connection idle ceiling in seconds. Bun.serve defaults to 10s and kills any
+// connection with no bytes moving, which the paid path can legitimately exceed:
+// it chains facilitator verify + settle and Nosana pin + create, each Nosana
+// call budgeted at 60s (provisioning.ts NOSANA_CALL_TIMEOUT_MS). A connection
+// cut after settle loses the agent's receipt (deployment id, session, refund
+// tx), observed once in the 2026-07-08 mainnet sign-off log
+// (docs/evidence/2026-07-08-mainnet-signoff.txt). 180s covers two chained
+// 60s budgets plus facilitator round-trips; Bun caps the setting at 255.
+const CONNECTION_IDLE_TIMEOUT_SECONDS = 180;
+
 export default {
   port: config.port,
   fetch: app.fetch,
+  idleTimeout: CONNECTION_IDLE_TIMEOUT_SECONDS,
 };
