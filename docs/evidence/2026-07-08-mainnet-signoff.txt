@@ -1,0 +1,34 @@
+gateway up on mainnet (port 3998)
+=== agent demo (mainnet, market=nvidia-3060, 5 min) ===
+bigint: Failed to load bindings, pure JS will be used (try npm run rebuild?)
+[agentDemo] agent wallet: DgkzxeKK84FCdrNkcF1yg9e3Vu3TybX1fk6eA5bikbM
+[agentDemo] PASS discover markets: 46 markets, using "nvidia-3060"
+[agentDemo] PASS rent (pay 402): deployment=2QBkNYeFY7wrfai5M7Wassy3mymTokFZTuAPiFCkU175 paid=0.003634 USD tx=4nVCqPSq28qcVcbBCYEK84DfKThMdy5JGeofW9r3dMrDprLjS8j6NQBtabR3GewiXtRMpttKUtrHeYJwubTPJ3TE
+[agentDemo] PASS poll until running: RUNNING, endpoint=https://42YDVK63cc1kb2PBQ2NFPzEdFGiyqtaG4z29J1Kybsru.node.k8s.prd.nos.ci
+[agentDemo] PASS hit deployment endpoint: HTTP 200 from https://42YDVK63cc1kb2PBQ2NFPzEdFGiyqtaG4z29J1Kybsru.node.k8s.prd.nos.ci
+[agentDemo] PASS extend (pay 402): new timeout=10 minutes
+[agentDemo] PASS stop: final status=COMPLETED
+
+[agentDemo] ===== sign-off summary =====
+[agentDemo] PASS    discover markets
+[agentDemo] PASS    rent (pay 402)
+[agentDemo] PASS    poll until running
+[agentDemo] PASS    hit deployment endpoint
+[agentDemo] PASS    extend (pay 402)
+[agentDemo] PASS    stop
+
+demo exit code: 0
+
+=== gateway log ===
+[startGateway] REFUNDS OWED: 1 settled payment(s) without a running deployment
+[startGateway] refund owed: tx=66rz5eLoQb1viiX1t8LHKcRyRGqZYb6nfyMuAvi3U92L6AfNRskYMcLS7M35XRxEhBUMtmmk5p6soxALpGt7Ehg6 payer=DgkzxeKK84FCdrNkcF1yg9e3Vu3TybX1fk6eA5bikbM amountAtomic=727 market=nvidia-3060
+[startGateway] nosana-x402-gateway on port 3998: network=solana facilitator=https://facilitator.payai.network payTo=7BF8eaGq9hgJGQcauqZyDwkfF9ZViHomwvnLnjw7ABLw
+Started development server: http://localhost:3998
+[listMarkets] skipping malformed market: market 3XGECQon74HQwPJuZjgCwqdQ5Nt3wktZ9fcavcDN9qB2 has no numeric usd_reward_per_hour
+[respondWithPaymentRequired] 402 quote: market=nvidia-3060 minutes=5 amountAtomic=3634
+[createRentRouter] rented: deployment=2QBkNYeFY7wrfai5M7Wassy3mymTokFZTuAPiFCkU175 market=nvidia-3060 minutes=5 tx=4nVCqPSq28qcVcbBCYEK84DfKThMdy5JGeofW9r3dMrDprLjS8j6NQBtabR3GewiXtRMpttKUtrHeYJwubTPJ3TE
+[Bun.serve]: request timed out after 10 seconds. Pass `idleTimeout` to configure.
+[respondWithPaymentRequired] 402 quote: market=nvidia-3060 minutes=5 amountAtomic=3634
+[listMarkets] skipping malformed market: market 3XGECQon74HQwPJuZjgCwqdQ5Nt3wktZ9fcavcDN9qB2 has no numeric usd_reward_per_hour
+[createRentRouter] extended: deployment=2QBkNYeFY7wrfai5M7Wassy3mymTokFZTuAPiFCkU175 addedMinutes=5 newTimeout=10 tx=2BJmQebiZ6Snk6dzbycDva2yawh6RFxapimirc5nqyPJHsyfhFSr1H6w4FNFjf8qbRdPAf9mZU3eEGirHF4zQFVw
+[createRentRouter] stopped: deployment=2QBkNYeFY7wrfai5M7Wassy3mymTokFZTuAPiFCkU175

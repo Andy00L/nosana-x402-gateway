@@ -18,7 +18,7 @@
   <img src="https://img.shields.io/badge/payments-USDC%20on%20Solana-9A5B13" alt="payments USDC on Solana">
   <img src="https://img.shields.io/badge/compute-Nosana%20credits%20API-25704F" alt="compute Nosana credits API">
   <img src="https://img.shields.io/badge/runtime-Bun%20%2B%20Hono-1C1917" alt="runtime Bun and Hono">
-  <img src="https://img.shields.io/badge/tests-100%20passing-25704F" alt="100 tests passing">
+  <img src="https://img.shields.io/badge/tests-107%20passing-25704F" alt="107 tests passing">
   <img src="https://img.shields.io/badge/license-MIT-736E64" alt="license MIT">
 </p>
 
@@ -34,7 +34,8 @@ rail, the permissionless on-chain jobs program, wants NOS and a signing wallet;
 the credits rail is USD-denominated and takes an API key, which is why the
 gateway targets it. Settling those USDC payments straight into Nosana's own
 credit ledger, so no operator sits in the middle, is the endgame and the reason
-this is a proposal.
+this is a proposal. What adopting it takes, path by path, is one page:
+[docs/INTEGRATION.md](docs/INTEGRATION.md).
 
 The whole loop, run end to end against Nosana mainnet with the mock agent in
 [scripts/agent-demo.ts](scripts/agent-demo.ts):
@@ -138,7 +139,7 @@ The sequence above is the order; this is every field that crosses the wire, from
 the first request to the receipt:
 
 <p align="center">
-  <img src="docs/assets/payment-schema.svg" width="900" alt="The x402 rent exchange field by field: the POST /rent request body (market, duration_minutes, job_definition); the 402 response with x402 PaymentRequirements (amount, payTo, asset, network), an availability block, and a hint; the paid retry carrying the PAYMENT-SIGNATURE header with a signed USDC transfer; and the 200 receipt with deployment_id, a session JWT, the settlement tx, and next steps.">
+  <img src="docs/assets/payment-schema.svg" width="900" alt="The x402 rent exchange field by field: the POST /rent request body (market, duration_minutes, job_definition); the 402 response with x402 PaymentRequirements (amount, payTo, asset, network), an availability block, and a hint; the paid retry carrying the PAYMENT-SIGNATURE header with a signed USDC transfer; and the 200 receipt with deployment_id, endpoints, a session JWT, the settlement tx, and next steps.">
 </p>
 
 The unhappy paths are where the design lives. A garbage or invalid payment is
@@ -184,9 +185,10 @@ service URLs):
 | Provision on credits | job posted, reached RUNNING | job [2QBkNYeF](https://solscan.io/account/2QBkNYeFY7wrfai5M7Wassy3mymTokFZTuAPiFCkU175) |
 | Call the rented service | HTTP 200 from the derived URL | endpoint `https://42YDVK63cc1kb2PBQ2NFPzEdFGiyqtaG4z29J1Kybsru.node.k8s.prd.nos.ci` |
 | Extend, 2nd payment | timeout 5 to 10 minutes | tx [2BJmQebi](https://solscan.io/tx/2BJmQebiZ6Snk6dzbycDva2yawh6RFxapimirc5nqyPJHsyfhFSr1H6w4FNFjf8qbRdPAf9mZU3eEGirHF4zQFVw) |
-| Stop | final status COMPLETED | run log above |
+| Stop | final status COMPLETED | [full run transcript](docs/evidence/2026-07-08-mainnet-signoff.txt) |
 
-`GET /markets` on mainnet returns 47 tiers, each with the queue read from chain.
+`GET /markets` on mainnet returns 46 priced tiers (a 47th lists no price and is
+skipped), each with the queue read from chain.
 At capture time `nvidia-5070` had 25 idle hosts (a paid job starts at once) and
 `nvidia-4070` had 297 jobs queued (a paid job waits): exactly the difference the
 `availability` block tells the agent before it pays.
@@ -243,9 +245,13 @@ revision.
 - **Refunds are recorded, not sent.** The ledger and startup scan name every
   refund owed with its tx; automated refunds need the treasury hot wallet and a
   security review. One refund of 0.000727 USDC is outstanding.
-- **The renter fee question is open.** Markets expose `network_fee_percentage`
-  (10 today); whether the renter pays it on top of `usd_reward_per_hour` is
-  unconfirmed, so the gateway charges the base rate. Asked to the Nosana team.
+- **The renter fee is measured but unconfirmed.** On the on-chain rail, job
+  accounts price at 1.1x the base rate (`job_price_per_second` over
+  `reward_per_second` is 1.1 on all 16 markets checked, matching
+  `network_fee_percentage` of 10), yet the credits ledger reserved exactly the
+  base rate for this gateway's test job. The two rails disagree, so the gateway
+  charges the base rate until the Nosana team confirms which is intended
+  (asked, ticket 1744).
 - **Quote-only mode oversells.** Without `NOSANA_API_KEY` the gateway quotes
   what it cannot fulfill, for local dev; every payment is refused with 503 first.
 - **No rate limiting yet.** The paid path is metered by payment, but the quote
@@ -266,7 +272,10 @@ src/
   routes/        rent (quote, pay, lifecycle), markets discovery, admin ledger
   *.test.ts      unit tests colocated with the modules they cover
 scripts/         agent-demo.ts, the mock x402 agent for the mainnet sign-off
-docs/assets/     the icon and the architecture diagram
+docs/
+  INTEGRATION.md what adopting this natively takes, path by path
+  assets/        the icon, the architecture diagram, the payment schema
+  evidence/      raw transcripts of the mainnet sign-off runs
 .env.example     every environment variable, documented
 ```
 

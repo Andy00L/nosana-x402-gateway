@@ -25,6 +25,7 @@ data/
 docs/*
 !docs/evidence/
 !docs/assets/
+!docs/INTEGRATION.md
 # the design token sheet is an internal reference, kept local only
 docs/assets/DESIGN_TOKENS.md
 

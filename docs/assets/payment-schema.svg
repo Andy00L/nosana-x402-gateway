@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 1490" width="1120" height="1490" role="img" aria-label="The x402 rent exchange field by field: the agent POSTs a rent request, the gateway answers 402 with x402 PaymentRequirements plus availability and a hint, the agent resends with a PAYMENT-SIGNATURE header carrying a signed USDC transfer, and the gateway returns 200 with the deployment id, a session JWT, the settlement transaction, and next steps.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 1490" width="1120" height="1490" role="img" aria-label="The x402 rent exchange field by field: the agent POSTs a rent request, the gateway answers 402 with x402 PaymentRequirements plus availability and a hint, the agent resends with a PAYMENT-SIGNATURE header carrying a signed USDC transfer, and the gateway returns 200 with the deployment id, a live service URL per exposed port, a session JWT, the settlement transaction, and next steps.">
   <defs>
     <radialGradient id="psGlow" cx="28%" cy="6%" r="95%">
       <stop offset="0%" stop-color="#9a5b13" stop-opacity="0.05"/>
@@ -126,14 +126,15 @@
   <text class="mono" x="989" y="1084" font-size="11.5" fill="#ffffff" text-anchor="middle">200  session issued</text>
   <!-- json -->
   <text class="mono" x="98" y="1124" font-size="15"><tspan class="jpun">{ </tspan><tspan class="jkey">"deployment_id"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"9H4bVD1v&#8230;pV2Pj"</tspan><tspan class="jpun">, </tspan><tspan class="jkey">"status"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"QUEUED"</tspan><tspan class="jpun">,</tspan></text>
-  <text class="mono" x="98" y="1149" font-size="15"><tspan class="jpun">&#160;&#160;</tspan><tspan class="jkey">"session"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"eyJhbGciOi&#8230;"</tspan><tspan class="jpun">,</tspan></text>
-  <text class="mono jnote" x="660" y="1149" font-size="12.5">&#8592; HS256 JWT, scoped to this deployment</text>
-  <text class="mono" x="98" y="1174" font-size="15"><tspan class="jpun">&#160;&#160;</tspan><tspan class="jkey">"payment"</tspan><tspan class="jpun">: {</tspan></text>
-  <text class="mono" x="98" y="1199" font-size="15"><tspan class="jpun">&#160;&#160;&#160;&#160;</tspan><tspan class="jkey">"tx_signature"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"3dkKwc4B&#8230;j7K1s"</tspan><tspan class="jpun">,</tspan></text>
+  <text class="mono" x="98" y="1149" font-size="15"><tspan class="jpun">&#160;&#160;</tspan><tspan class="jkey">"endpoints"</tspan><tspan class="jpun">: [ { </tspan><tspan class="jkey">"url"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"https://qrDopp&#8230;.nos.ci"</tspan><tspan class="jpun">, </tspan><tspan class="jnote">&#8230;</tspan><tspan class="jpun"> } ],</tspan></text>
+  <text class="mono jnote" x="660" y="1149" font-size="12.5">&#8592; a live URL per exposed port, once RUNNING</text>
+  <text class="mono" x="98" y="1174" font-size="15"><tspan class="jpun">&#160;&#160;</tspan><tspan class="jkey">"session"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"eyJhbGciOi&#8230;"</tspan><tspan class="jpun">,</tspan></text>
+  <text class="mono jnote" x="660" y="1174" font-size="12.5">&#8592; HS256 JWT, scoped to this deployment</text>
+  <text class="mono" x="98" y="1199" font-size="15"><tspan class="jpun">&#160;&#160;</tspan><tspan class="jkey">"payment"</tspan><tspan class="jpun">: { </tspan><tspan class="jkey">"tx_signature"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"3dkKwc4B&#8230;j7K1s"</tspan><tspan class="jpun">,</tspan></text>
   <text class="mono jnote" x="660" y="1199" font-size="12.5">&#8592; settled on Solana mainnet</text>
   <text class="mono" x="98" y="1224" font-size="15"><tspan class="jpun">&#160;&#160;&#160;&#160;</tspan><tspan class="jkey">"amount_atomic"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"43600"</tspan><tspan class="jpun">, </tspan><tspan class="jkey">"amount_usd"</tspan><tspan class="jpun">: </tspan><tspan class="jnum">0.0436</tspan><tspan class="jpun"> },</tspan></text>
-  <text class="mono" x="98" y="1249" font-size="15"><tspan class="jpun">&#160;&#160;</tspan><tspan class="jkey">"next"</tspan><tspan class="jpun">: { </tspan><tspan class="jkey">"results"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"by job id; no live URL"</tspan><tspan class="jpun">, </tspan><tspan class="jnote">&#8230;</tspan><tspan class="jpun"> } }</tspan></text>
-  <text class="sans cap" x="98" y="1286" font-size="13.5">The job id, a session bound to it, the on-chain receipt, and what to do next.</text>
+  <text class="mono" x="98" y="1249" font-size="15"><tspan class="jpun">&#160;&#160;</tspan><tspan class="jkey">"next"</tspan><tspan class="jpun">: { </tspan><tspan class="jkey">"results"</tspan><tspan class="jpun">: </tspan><tspan class="jstr">"endpoints[] while RUNNING; batch by job id"</tspan><tspan class="jpun">, </tspan><tspan class="jnote">&#8230;</tspan><tspan class="jpun"> } }</tspan></text>
+  <text class="sans cap" x="98" y="1286" font-size="13.5">The job id, its live service URL, a session bound to it, the on-chain receipt, and what to do next.</text>
 
   <!-- ============ footer: lifecycle ============ -->
   <text class="sans" x="66" y="1348" font-size="14" font-weight="600" fill="#1c1917">Then, session-authenticated (no more discovery, no more x402):</text>
