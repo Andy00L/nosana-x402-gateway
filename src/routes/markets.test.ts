@@ -2,7 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { createMarketsRouter } from "./markets.js";
 import type { MarketsService, GatewayMarket } from "../lib/markets.js";
 import type { AvailabilityService, MarketAvailability } from "../lib/availability.js";
+import {
+  createRateLimiter,
+  createUnpaidRateLimitMiddleware,
+} from "../lib/rateLimit.js";
 import { ok, err, type Result } from "../lib/result.js";
+
+// A fresh permissive limiter per router: these tests make far fewer requests
+// than one window allows, so the middleware never interferes. Without a Bun
+// server every request shares the "unknown" client key, which is exactly what
+// the exhaustion test below relies on.
+const buildPermissiveRateLimit = () =>
+  createUnpaidRateLimitMiddleware(createRateLimiter(), false);
 
 const marketWithHosts: GatewayMarket = {
   address: "9MGKqixvtLJgL46Bp38ZrD3MxTMRt57VL3rQtQY64zj4",
@@ -59,7 +70,7 @@ describe("createMarketsRouter", () => {
         ]),
       ),
     );
-    const router = createMarketsRouter(marketsService, availabilityService);
+    const router = createMarketsRouter(marketsService, availabilityService, buildPermissiveRateLimit());
     const response = await router.request("/");
     expect(response.status).toBe(200);
     const body = (await response.json()) as MarketsResponseBody;
@@ -74,7 +85,7 @@ describe("createMarketsRouter", () => {
   test("degrades every market to unknown when the queue read fails", async () => {
     const marketsService = buildMarketsService(async () => ok([marketWithHosts]));
     const availabilityService = buildAvailabilityService(async () => err("rpc down"));
-    const router = createMarketsRouter(marketsService, availabilityService);
+    const router = createMarketsRouter(marketsService, availabilityService, buildPermissiveRateLimit());
     const response = await router.request("/");
     expect(response.status).toBe(200);
     const body = (await response.json()) as MarketsResponseBody;
@@ -84,8 +95,25 @@ describe("createMarketsRouter", () => {
   test("returns 502 when the markets API is unreachable", async () => {
     const marketsService = buildMarketsService(async () => err("markets API unreachable: boom"));
     const availabilityService = buildAvailabilityService(async () => ok(new Map()));
-    const router = createMarketsRouter(marketsService, availabilityService);
+    const router = createMarketsRouter(marketsService, availabilityService, buildPermissiveRateLimit());
     const response = await router.request("/");
     expect(response.status).toBe(502);
+  });
+
+  test("refuses with 429 and a retry-after header once the rate limit is spent", async () => {
+    const marketsService = buildMarketsService(async () => ok([marketWithHosts]));
+    const availabilityService = buildAvailabilityService(async () => ok(new Map()));
+    // One request per window; the second must be refused before the handler runs.
+    const router = createMarketsRouter(
+      marketsService,
+      availabilityService,
+      createUnpaidRateLimitMiddleware(createRateLimiter(1), false),
+    );
+    expect((await router.request("/")).status).toBe(200);
+    const refused = await router.request("/");
+    expect(refused.status).toBe(429);
+    expect(Number(refused.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    const body = (await refused.json()) as { error: string };
+    expect(body.error).toContain("too many unpaid requests");
   });
 });

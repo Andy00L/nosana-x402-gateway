@@ -44,6 +44,11 @@ export interface GatewayConfig {
   // drop its Nosana balance below this. Default 0 (refuse only when it cannot
   // cover the rental at all).
   readonly minCreditsFloorCents: number;
+  // When true, rate limits key on the first x-forwarded-for entry instead of
+  // the socket address. Only correct behind a reverse proxy that sets the
+  // header; on a directly exposed gateway any client could spoof its bucket
+  // key, so the default is false.
+  readonly trustProxy: boolean;
   readonly port: number;
 }
 
@@ -86,6 +91,16 @@ export const loadGatewayConfig = (
     );
   }
 
+  const trustProxyRaw = environment.TRUST_PROXY;
+  // Explicit allowlist instead of Boolean coercion so a typo ("ture") is a
+  // startup error, not a silently disabled proxy mode.
+  const TRUST_PROXY_ENABLED_VALUES = ["1", "true"];
+  const TRUST_PROXY_DISABLED_VALUES = [undefined, "", "0", "false"];
+  const trustProxy = TRUST_PROXY_ENABLED_VALUES.includes(trustProxyRaw ?? "");
+  if (!trustProxy && !TRUST_PROXY_DISABLED_VALUES.includes(trustProxyRaw)) {
+    return err(`TRUST_PROXY must be "1", "true", "0", or "false", got "${trustProxyRaw}"`);
+  }
+
   const portRaw = environment.PORT;
   const port = portRaw === undefined ? DEFAULT_PORT : Number.parseInt(portRaw, 10);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -103,6 +118,7 @@ export const loadGatewayConfig = (
     settlementDbPath: environment.SETTLEMENT_DB_PATH ?? DEFAULT_SETTLEMENT_DB_PATH,
     adminToken: environment.ADMIN_TOKEN || undefined,
     minCreditsFloorCents,
+    trustProxy,
     port,
   });
 };

@@ -8,6 +8,11 @@ import { createSettlementStore } from "./lib/settlementStore.js";
 import { createProvisioningService } from "./lib/provisioning.js";
 import { createAvailabilityService, type MarketQueueSource } from "./lib/availability.js";
 import { buildServiceDescription } from "./lib/agentGuide.js";
+import {
+  createRateLimiter,
+  createUnpaidRateLimitMiddleware,
+} from "./lib/rateLimit.js";
+import { reportRefundsOwed } from "./lib/refundScan.js";
 import { ok, err } from "./lib/result.js";
 import { withTimeout } from "./lib/withTimeout.js";
 import { createRentRouter } from "./routes/rent.js";
@@ -64,18 +69,15 @@ const settlementStore = createSettlementStore(config.settlementDbPath);
 const provisioningService = createProvisioningService(config);
 
 // Restart recovery: a crash between settle and provision leaves a paid record
-// with no deployment. Surface each one loudly; these are refunds owed.
-const paidWithoutDeployment = settlementStore.listPaidWithoutDeployment();
-if (paidWithoutDeployment.length > 0) {
-  console.error(
-    `[startGateway] REFUNDS OWED: ${paidWithoutDeployment.length} settled payment(s) without a running deployment`,
-  );
-  for (const record of paidWithoutDeployment) {
-    console.error(
-      `[startGateway] refund owed: tx=${record.txSignature} payer=${record.payer} amountAtomic=${record.amountAtomic} market=${record.marketSlug}`,
-    );
-  }
-}
+// with no deployment. Surface each one loudly; these are refunds owed. The
+// operator lists and closes them through GET /admin/refunds.
+reportRefundsOwed(settlementStore);
+
+// Refund sweep cadence in milliseconds. The same scan re-runs on a timer so a
+// provision failure that happens while the gateway is up surfaces within
+// minutes, not only at the next restart.
+const REFUND_SCAN_INTERVAL_MS = 10 * 60 * 1000;
+setInterval(() => reportRefundsOwed(settlementStore), REFUND_SCAN_INTERVAL_MS);
 if (!provisioningService.isConfigured) {
   console.warn(
     "[startGateway] NOSANA_API_KEY is not set: quotes are served but every payment is refused before settlement",
@@ -96,11 +98,23 @@ app.use(
   }),
 );
 
+// One shared budget for the whole unpaid surface (GET /markets and the 402
+// quote branches): a scraper alternating between the two paths cannot double
+// its allowance.
+const unpaidRateLimiter = createRateLimiter();
+
 // Root discovery: the whole x402 rent flow on one page, so an agent can orient
 // (headers, ordered steps, every endpoint) before it makes any request.
 app.get("/", (context) => context.json(buildServiceDescription(config.x402Network)));
 app.get("/health", (context) => context.json({ status: "ok" }));
-app.route("/markets", createMarketsRouter(marketsService, availabilityService));
+app.route(
+  "/markets",
+  createMarketsRouter(
+    marketsService,
+    availabilityService,
+    createUnpaidRateLimitMiddleware(unpaidRateLimiter, config.trustProxy),
+  ),
+);
 app.route(
   "/rent",
   createRentRouter({
@@ -110,6 +124,7 @@ app.route(
     x402Handler,
     settlementStore,
     provisioningService,
+    unpaidRateLimiter,
   }),
 );
 app.route(

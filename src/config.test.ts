@@ -23,7 +23,28 @@ describe("loadGatewayConfig", () => {
       expect(config.value.nosanaApiKey).toBeUndefined();
       expect(config.value.adminToken).toBeUndefined();
       expect(config.value.minCreditsFloorCents).toBe(0);
+      expect(config.value.trustProxy).toBe(false);
     }
+  });
+
+  test("accepts the documented TRUST_PROXY values and rejects a typo", () => {
+    const enabled = { ...buildValidEnvironment(), TRUST_PROXY: "1" };
+    const enabledConfig = loadGatewayConfig(enabled);
+    expect(enabledConfig.ok).toBe(true);
+    if (enabledConfig.ok) {
+      expect(enabledConfig.value.trustProxy).toBe(true);
+    }
+
+    const disabled = { ...buildValidEnvironment(), TRUST_PROXY: "false" };
+    const disabledConfig = loadGatewayConfig(disabled);
+    expect(disabledConfig.ok).toBe(true);
+    if (disabledConfig.ok) {
+      expect(disabledConfig.value.trustProxy).toBe(false);
+    }
+
+    // A typo must be a startup error, not silently disabled proxy mode.
+    const typo = { ...buildValidEnvironment(), TRUST_PROXY: "ture" };
+    expect(loadGatewayConfig(typo).ok).toBe(false);
   });
 
   test("maps mainnet to the simple x402 network name", () => {

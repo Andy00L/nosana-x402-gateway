@@ -22,6 +22,7 @@ import {
   formatAvailability,
   shouldRefuseUnavailable,
 } from "../lib/availability.js";
+import { enforceUnpaidRateLimit, type RateLimiter } from "../lib/rateLimit.js";
 import {
   MIN_RENT_DURATION_MINUTES,
   MAX_RENT_DURATION_MINUTES,
@@ -99,6 +100,9 @@ interface RentRouterDependencies {
   readonly x402Handler: X402PaymentHandler;
   readonly settlementStore: SettlementStore;
   readonly provisioningService: ProvisioningService;
+  // Meters the unpaid quote branches only: a request carrying a payment header
+  // is metered by the payment itself.
+  readonly unpaidRateLimiter: RateLimiter;
 }
 
 export const createRentRouter = (dependencies: RentRouterDependencies): Hono => {
@@ -109,6 +113,7 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
     x402Handler,
     settlementStore,
     provisioningService,
+    unpaidRateLimiter,
   } = dependencies;
   const rentRouter = new Hono();
 
@@ -155,6 +160,17 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
   };
 
   rentRouter.post("/", async (context) => {
+    // An unpaid quote request fans out to the markets API and the chain, so it
+    // is rate limited before any upstream call; the paid retry is exempt (it
+    // is metered by its payment, and its quote request already spent budget).
+    const paymentHeader = x402Handler.extractPayment(context.req.raw.headers);
+    if (!paymentHeader) {
+      const rateRefusal = enforceUnpaidRateLimit(context, unpaidRateLimiter, config.trustProxy);
+      if (rateRefusal) {
+        return rateRefusal;
+      }
+    }
+
     let rawBody: unknown;
     try {
       rawBody = await context.req.json();
@@ -215,7 +231,6 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
       return respondWithJsonError(context, 502, requirementsResult.reason);
     }
 
-    const paymentHeader = x402Handler.extractPayment(context.req.raw.headers);
     if (!paymentHeader) {
       return respondWithPaymentRequired(
         context,
@@ -321,6 +336,17 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
       return respondWithJsonError(context, 401, session.reason);
     }
 
+    // Same rule as POST /rent: the unpaid extend quote reaches Nosana and the
+    // markets API, so it is rate limited after the (local, cheap) session check
+    // and before any upstream call.
+    const paymentHeader = x402Handler.extractPayment(context.req.raw.headers);
+    if (!paymentHeader) {
+      const rateRefusal = enforceUnpaidRateLimit(context, unpaidRateLimiter, config.trustProxy);
+      if (rateRefusal) {
+        return rateRefusal;
+      }
+    }
+
     let rawBody: unknown;
     try {
       rawBody = await context.req.json();
@@ -359,7 +385,6 @@ export const createRentRouter = (dependencies: RentRouterDependencies): Hono => 
       return respondWithJsonError(context, 502, requirementsResult.reason);
     }
 
-    const paymentHeader = x402Handler.extractPayment(context.req.raw.headers);
     if (!paymentHeader) {
       return respondWithPaymentRequired(context, quoteResult.value, requirementsResult.value);
     }

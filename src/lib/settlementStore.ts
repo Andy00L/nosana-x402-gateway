@@ -8,6 +8,9 @@ import { type Result, ok, err } from "./result.js";
 //   reserved -> settled -> provisioned | provision_failed
 //   reserved -> settle_unknown   (settle transport error: money MAY have moved)
 //   reserved -> settle_rejected  (facilitator explicitly refused: money did NOT move)
+//   settled | provision_failed | settle_unknown -> refunded
+//     (the operator sent the USDC back and recorded the refund tx via the
+//      admin refund route)
 // A reservation row is only ever DELETED before settle is attempted (a capacity
 // refusal, where no money moved). Once settle is attempted the row is never
 // deleted: deleting it would reopen a replay window where a settle that landed
@@ -21,7 +24,14 @@ export type SettlementStatus =
   | "provisioned"
   | "provision_failed"
   | "settle_unknown"
-  | "settle_rejected";
+  | "settle_rejected"
+  | "refunded";
+
+// The only statuses a refund can be recorded from: every state where money
+// moved (or may have moved) without a delivered deployment. Shared by
+// markRefunded and listPaidWithoutDeployment so the two can never disagree on
+// what counts as owed.
+const REFUNDABLE_STATUSES = ["settled", "provision_failed", "settle_unknown"] as const;
 
 export interface SettlementRecord {
   readonly paymentKey: string;
@@ -32,6 +42,17 @@ export interface SettlementRecord {
   readonly durationMinutes: number;
   readonly amountAtomic: string;
   readonly deploymentId: string | null;
+  // Signature of the operator's refund transfer, recorded when the row moves
+  // to 'refunded'. Null in every other status.
+  readonly refundTxSignature: string | null;
+}
+
+// Why markRefunded failed, so the admin route can answer 404 (no such
+// payment) and 409 (exists but not awaiting a refund) distinctly
+// (REFERENCE_SECURITY_AUDIT.md always-on rule 8).
+export interface MarkRefundedFailure {
+  readonly code: "not_found" | "not_refundable";
+  readonly message: string;
 }
 
 // Per-status counts and atomic-unit totals, for reconciliation. Totals are
@@ -49,6 +70,8 @@ export interface LedgerSummary {
   readonly settleUnknownAtomicTotal: string;
   readonly settleRejectedCount: number;
   readonly settleRejectedAtomicTotal: string;
+  readonly refundedCount: number;
+  readonly refundedAtomicTotal: string;
 }
 
 // The raw PAYMENT-SIGNATURE header embeds the signed transaction; storing its
@@ -70,6 +93,13 @@ export interface SettlementStore {
   markSettleRejected: (paymentKey: string) => void;
   markProvisioned: (paymentKey: string, deploymentId: string) => void;
   markProvisionFailed: (paymentKey: string, deploymentId: string | null) => void;
+  // The operator sent the USDC back: record the refund tx and close the row.
+  // Only valid from a status where money was owed; the payment key stays in
+  // the table so the original header can never be replayed.
+  markRefunded: (
+    paymentKey: string,
+    refundTxSignature: string,
+  ) => Result<void, MarkRefundedFailure>;
   listPaidWithoutDeployment: () => SettlementRecord[];
   summarizeLedger: () => LedgerSummary;
 }
@@ -83,6 +113,7 @@ interface SettlementRow {
   duration_minutes: number;
   amount_atomic: string;
   deployment_id: string | null;
+  refund_tx_signature: string | null;
 }
 
 const mapRowToRecord = (row: SettlementRow): SettlementRecord => ({
@@ -94,6 +125,7 @@ const mapRowToRecord = (row: SettlementRow): SettlementRecord => ({
   durationMinutes: row.duration_minutes,
   amountAtomic: row.amount_atomic,
   deploymentId: row.deployment_id,
+  refundTxSignature: row.refund_tx_signature,
 });
 
 export const createSettlementStore = (databasePath: string): SettlementStore => {
@@ -103,18 +135,28 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
   database.exec("PRAGMA journal_mode = WAL;");
   database.exec(`
     CREATE TABLE IF NOT EXISTS settlements (
-      payment_key      TEXT PRIMARY KEY,
-      status           TEXT NOT NULL,
-      tx_signature     TEXT UNIQUE,
-      payer            TEXT,
-      market_slug      TEXT NOT NULL,
-      duration_minutes INTEGER NOT NULL,
-      amount_atomic    TEXT NOT NULL,
-      deployment_id    TEXT,
-      created_at       INTEGER NOT NULL,
-      updated_at       INTEGER NOT NULL
+      payment_key         TEXT PRIMARY KEY,
+      status              TEXT NOT NULL,
+      tx_signature        TEXT UNIQUE,
+      payer               TEXT,
+      market_slug         TEXT NOT NULL,
+      duration_minutes    INTEGER NOT NULL,
+      amount_atomic       TEXT NOT NULL,
+      deployment_id       TEXT,
+      refund_tx_signature TEXT,
+      created_at          INTEGER NOT NULL,
+      updated_at          INTEGER NOT NULL
     );
   `);
+  // In-place migration for databases created before the refund column existed
+  // (the live ledger predates it and CREATE TABLE IF NOT EXISTS never alters
+  // an existing table). PRAGMA-guarded so reopening is idempotent.
+  const existingColumns = database
+    .query(`PRAGMA table_info(settlements)`)
+    .all() as { name: string }[];
+  if (!existingColumns.some((column) => column.name === "refund_tx_signature")) {
+    database.exec(`ALTER TABLE settlements ADD COLUMN refund_tx_signature TEXT;`);
+  }
 
   const reservePayment: SettlementStore["reservePayment"] = (paymentKey, quoteInfo) => {
     // INSERT OR IGNORE is the atomic check-and-set: a second request carrying
@@ -205,19 +247,49 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
       .run(paymentKey, deploymentId);
   };
 
+  const markRefunded: SettlementStore["markRefunded"] = (paymentKey, refundTxSignature) => {
+    // The WHERE clause is the atomic guard: only a status where money is owed
+    // can move to 'refunded', so a double mark (or a mark on a provisioned
+    // rental) changes zero rows and is reported distinctly below.
+    const updateResult = database
+      .query(
+        `UPDATE settlements
+           SET status = 'refunded', refund_tx_signature = ?2, updated_at = unixepoch()
+         WHERE payment_key = ?1
+           AND status IN (${REFUNDABLE_STATUSES.map(() => "?").join(", ")})`,
+      )
+      .run(paymentKey, refundTxSignature, ...REFUNDABLE_STATUSES);
+    if (updateResult.changes === 1) {
+      return ok(undefined);
+    }
+    const existingRow = database
+      .query(`SELECT status FROM settlements WHERE payment_key = ?1`)
+      .get(paymentKey) as { status: SettlementStatus } | null;
+    if (!existingRow) {
+      return err({
+        code: "not_found",
+        message: "no payment found for this payment key",
+      });
+    }
+    return err({
+      code: "not_refundable",
+      message: `payment is not awaiting a refund (status: ${existingRow.status})`,
+    });
+  };
+
   const listPaidWithoutDeployment: SettlementStore["listPaidWithoutDeployment"] = () => {
     // Every state where money may have moved but no running deployment resulted:
     // settled (stuck between settle and provision), provision_failed, and
     // settle_unknown (settle outcome unresolved). settle_rejected moved no money
-    // and is excluded.
+    // and refunded has been paid back; both are excluded.
     const rows = database
       .query(
         `SELECT payment_key, status, tx_signature, payer, market_slug,
-                duration_minutes, amount_atomic, deployment_id
+                duration_minutes, amount_atomic, deployment_id, refund_tx_signature
            FROM settlements
-          WHERE status IN ('settled', 'provision_failed', 'settle_unknown')`,
+          WHERE status IN (${REFUNDABLE_STATUSES.map(() => "?").join(", ")})`,
       )
-      .all() as SettlementRow[];
+      .all(...REFUNDABLE_STATUSES) as SettlementRow[];
     return rows.map(mapRowToRecord);
   };
 
@@ -251,6 +323,8 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
       settleUnknownAtomicTotal: totalForStatus("settle_unknown"),
       settleRejectedCount: countForStatus("settle_rejected"),
       settleRejectedAtomicTotal: totalForStatus("settle_rejected"),
+      refundedCount: countForStatus("refunded"),
+      refundedAtomicTotal: totalForStatus("refunded"),
     };
   };
 
@@ -262,6 +336,7 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
     markSettleRejected,
     markProvisioned,
     markProvisionFailed,
+    markRefunded,
     listPaidWithoutDeployment,
     summarizeLedger,
   };

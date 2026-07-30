@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdirSync, rmSync } from "node:fs";
 import { createSettlementStore, hashPaymentHeader } from "./settlementStore.js";
 
 // bun:sqlite accepts ":memory:" so each store below is isolated and leaves
@@ -109,6 +111,114 @@ describe("createSettlementStore", () => {
   });
 });
 
+describe("markRefunded", () => {
+  const REFUND_TX = "refund-tx-signature-1";
+
+  test("closes a provision_failed row and removes it from the owed list", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    store.reservePayment("key-1", QUOTE_INFO);
+    store.markSettled("key-1", "tx-sig-1", "payer-1");
+    store.markProvisionFailed("key-1", null);
+    expect(store.markRefunded("key-1", REFUND_TX).ok).toBe(true);
+    expect(store.listPaidWithoutDeployment()).toHaveLength(0);
+    const summary = store.summarizeLedger();
+    expect(summary.refundedCount).toBe(1);
+    expect(summary.refundedAtomicTotal).toBe(QUOTE_INFO.amountAtomic);
+    // The payment key stays in the table: the original header can never be
+    // replayed after the refund.
+    expect(store.reservePayment("key-1", QUOTE_INFO).ok).toBe(false);
+  });
+
+  test("closes settled and settle_unknown rows too", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    store.reservePayment("stuck-1", QUOTE_INFO);
+    store.markSettled("stuck-1", "tx-stuck-1", "payer-1");
+    expect(store.markRefunded("stuck-1", "refund-tx-a").ok).toBe(true);
+
+    store.reservePayment("unknown-1", QUOTE_INFO);
+    store.markSettleUnknown("unknown-1");
+    expect(store.markRefunded("unknown-1", "refund-tx-b").ok).toBe(true);
+
+    expect(store.listPaidWithoutDeployment()).toHaveLength(0);
+  });
+
+  test("refuses an unknown payment key as not_found", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    const refused = store.markRefunded("no-such-key", REFUND_TX);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.reason.code).toBe("not_found");
+    }
+  });
+
+  test("refuses a provisioned rental and a double mark as not_refundable", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    store.reservePayment("key-1", QUOTE_INFO);
+    store.markSettled("key-1", "tx-sig-1", "payer-1");
+    store.markProvisioned("key-1", "dep-1");
+    const provisionedRefusal = store.markRefunded("key-1", REFUND_TX);
+    expect(provisionedRefusal.ok).toBe(false);
+    if (!provisionedRefusal.ok) {
+      expect(provisionedRefusal.reason.code).toBe("not_refundable");
+      expect(provisionedRefusal.reason.message).toContain("provisioned");
+    }
+
+    store.reservePayment("key-2", QUOTE_INFO);
+    store.markSettled("key-2", "tx-sig-2", "payer-2");
+    store.markProvisionFailed("key-2", null);
+    expect(store.markRefunded("key-2", REFUND_TX).ok).toBe(true);
+    const doubleMark = store.markRefunded("key-2", REFUND_TX);
+    expect(doubleMark.ok).toBe(false);
+    if (!doubleMark.ok) {
+      expect(doubleMark.reason.code).toBe("not_refundable");
+    }
+  });
+
+  test("migrates a database created before the refund column existed", () => {
+    // The live ledger predates refund_tx_signature; prove the PRAGMA-guarded
+    // ALTER upgrades the old schema in place. A file (not :memory:) is needed
+    // so the pre-seeded old-schema table survives into createSettlementStore.
+    const LEGACY_DB_PATH = ".scratch/settlement-migration-test.db";
+    mkdirSync(".scratch", { recursive: true });
+    rmSync(LEGACY_DB_PATH, { force: true });
+    try {
+      const legacyDatabase = new Database(LEGACY_DB_PATH);
+      legacyDatabase.exec(`
+        CREATE TABLE settlements (
+          payment_key      TEXT PRIMARY KEY,
+          status           TEXT NOT NULL,
+          tx_signature     TEXT UNIQUE,
+          payer            TEXT,
+          market_slug      TEXT NOT NULL,
+          duration_minutes INTEGER NOT NULL,
+          amount_atomic    TEXT NOT NULL,
+          deployment_id    TEXT,
+          created_at       INTEGER NOT NULL,
+          updated_at       INTEGER NOT NULL
+        );
+        INSERT INTO settlements
+          (payment_key, status, tx_signature, payer, market_slug,
+           duration_minutes, amount_atomic, created_at, updated_at)
+        VALUES
+          ('legacy-1', 'provision_failed', 'tx-legacy-1', 'payer-legacy',
+           'test-market', 60, '727', unixepoch(), unixepoch());
+      `);
+      legacyDatabase.close();
+
+      const store = createSettlementStore(LEGACY_DB_PATH);
+      const owed = store.listPaidWithoutDeployment();
+      expect(owed).toHaveLength(1);
+      expect(owed[0]?.refundTxSignature).toBeNull();
+      expect(store.markRefunded("legacy-1", REFUND_TX).ok).toBe(true);
+      expect(store.listPaidWithoutDeployment()).toHaveLength(0);
+    } finally {
+      rmSync(LEGACY_DB_PATH, { force: true });
+      rmSync(`${LEGACY_DB_PATH}-wal`, { force: true });
+      rmSync(`${LEGACY_DB_PATH}-shm`, { force: true });
+    }
+  });
+});
+
 describe("summarizeLedger", () => {
   test("an empty ledger is all zeros", () => {
     const summary = createSettlementStore(IN_MEMORY_DB).summarizeLedger();
@@ -124,6 +234,8 @@ describe("summarizeLedger", () => {
       settleUnknownAtomicTotal: "0",
       settleRejectedCount: 0,
       settleRejectedAtomicTotal: "0",
+      refundedCount: 0,
+      refundedAtomicTotal: "0",
     });
   });
 

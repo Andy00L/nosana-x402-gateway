@@ -19,8 +19,10 @@ import type { RentQuote } from "./pricing.js";
 // chars). Reject empty or malformed values the facilitator might return so a
 // bogus signature never becomes our authoritative anti-replay key, and so a
 // success:true with no real transfer never provisions compute (audit H1).
+// Exported: the admin refund route applies the same shape check to the
+// operator-supplied refund tx signature before recording it.
 const SOLANA_SIGNATURE_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
-const isPlausibleSignature = (value: string): boolean =>
+export const isPlausibleSignature = (value: string): boolean =>
   SOLANA_SIGNATURE_PATTERN.test(value);
 
 export interface PaymentFailure {

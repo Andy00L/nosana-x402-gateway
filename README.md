@@ -18,7 +18,7 @@
   <img src="https://img.shields.io/badge/payments-USDC%20on%20Solana-9A5B13" alt="payments USDC on Solana">
   <img src="https://img.shields.io/badge/compute-Nosana%20credits%20API-25704F" alt="compute Nosana credits API">
   <img src="https://img.shields.io/badge/runtime-Bun%20%2B%20Hono-1C1917" alt="runtime Bun and Hono">
-  <img src="https://img.shields.io/badge/tests-107%20passing-25704F" alt="107 tests passing">
+  <img src="https://img.shields.io/badge/tests-126%20passing-25704F" alt="126 tests passing">
   <img src="https://img.shields.io/badge/license-MIT-736E64" alt="license MIT">
 </p>
 
@@ -104,7 +104,13 @@ stack.
   reservation insert is the atomic check-and-set. See
   [src/lib/settlementStore.ts](src/lib/settlementStore.ts).
 - **Refund ledger.** A payment that settles but fails to provision is recorded
-  `provision_failed`; the startup scan reprints every refund owed with its tx.
+  `provision_failed`; a ledger scan at startup and every 10 minutes prints each
+  refund owed with its tx. `GET /admin/refunds` turns the list into ready-to-run
+  `spl-token transfer` commands, and marking a sent refund closes the row.
+- **Rate limiting on the unpaid surface.** `GET /markets` and the unpaid 402
+  quote branches share one fixed-window budget per client address (60 requests
+  a minute); the paid retry is exempt because the payment itself meters it. See
+  [src/lib/rateLimit.ts](src/lib/rateLimit.ts).
 - **Scoped sessions.** Each rental returns an HS256 JWT bound to one
   `deployment_id`; lifecycle routes reject a session shown against another job.
   See [src/lib/session.ts](src/lib/session.ts).
@@ -165,12 +171,12 @@ before verify, so money never moves toward capacity that is not there.
 
 | Route | Auth | Success | Distinct failures |
 | --- | --- | --- | --- |
-| `POST /rent` | x402 payment | 200 deployment, session, tx | 400 input, 402 payment, 404 market, 409 replay, 502 upstream, 503 capacity |
+| `POST /rent` | x402 payment | 200 deployment, session, tx | 400 input, 402 payment, 404 market, 409 replay, 429 unpaid rate limit, 502 upstream, 503 capacity |
 | `GET /rent/:id` | session JWT | 200 status, timeout | 401 session, 502 lookup |
 | `POST /rent/:id/extend` | session JWT + x402 | 200 new timeout, session | as `POST /rent` plus 401 |
 | `POST /rent/:id/stop` | session JWT | 200 stopped | 401 session, 502 upstream |
 | `GET /` | none | 200 service and flow description | none |
-| `GET /markets` | none | 200 tiers with live rates and availability | 502 upstream |
+| `GET /markets` | none | 200 tiers with live rates and availability | 429 rate limit, 502 upstream |
 | `GET /health` | none | 200 | none |
 
 ## Live on Solana mainnet
@@ -228,7 +234,7 @@ curl -s -w "\nHTTP %{http_code}\n" -X POST localhost:3000/rent \
 The first call returns the live market list with an `availability` field per
 tier; the second returns `HTTP 402` with a body starting `{"x402Version":2` and
 an `amount` matching the market rate. `bun run typecheck` exits 0 on a clean
-clone, and `bun test` runs 107 unit tests. Every command here was run against this
+clone, and `bun test` runs 126 unit tests. Every command here was run against this
 revision.
 
 ## What is real and what is not
@@ -242,9 +248,12 @@ revision.
   (HTTP 200 above), but it is not a documented contract; whether it is stable
   is a question open with the Nosana team. Batch results still come back by job
   id through IPFS.
-- **Refunds are recorded, not sent.** The ledger and startup scan name every
-  refund owed with its tx; automated refunds need the treasury hot wallet and a
-  security review. One refund of 0.000727 USDC is outstanding.
+- **Refunds are recorded and tooled, not automated.** The ledger scan (startup
+  and every 10 minutes) names every refund owed, and `GET /admin/refunds`
+  emits a ready-to-run `spl-token transfer` command per refund plus a route to
+  record the sent tx. The signing step stays with the operator: fully automated
+  refunds need the treasury hot wallet online and a security review first. One
+  refund of 0.000727 USDC is outstanding.
 - **The renter fee is measured but unconfirmed.** On the on-chain rail, job
   accounts price at 1.1x the base rate (`job_price_per_second` over
   `reward_per_second` is 1.1 on all 16 markets checked, matching
@@ -254,8 +263,11 @@ revision.
   (asked, ticket 1744).
 - **Quote-only mode oversells.** Without `NOSANA_API_KEY` the gateway quotes
   what it cannot fulfill, for local dev; every payment is refused with 503 first.
-- **No rate limiting yet.** The paid path is metered by payment, but the quote
-  path can be spammed into the markets API (60s cache aside).
+- **Rate limiting is per-address and in-memory.** The unpaid surface is capped
+  at 60 requests a minute per client address; a restart resets the windows and
+  a distributed scraper with many addresses is out of scope for v1. Set
+  `TRUST_PROXY=1` behind a reverse proxy or every client shares the proxy's
+  budget.
 - **The trust model is custodial for v1.** The operator's wallet receives the
   USDC and the operator's credits pay for compute. Settling x402 straight into
   Nosana's credit ledger is the upstream goal and needs their backend.
@@ -268,8 +280,9 @@ src/
   config.ts      environment validation, crash early on bad config
   lib/           pricing, markets, availability, x402 wrappers, payment gauntlet,
                  settlement store, sessions, credits provisioning, agent guide,
-                 timeouts
+                 timeouts, rate limiting, refund scan
   routes/        rent (quote, pay, lifecycle), markets discovery, admin ledger
+                 and refund tooling
   *.test.ts      unit tests colocated with the modules they cover
 scripts/         agent-demo.ts, the mock x402 agent for the mainnet sign-off
 docs/
