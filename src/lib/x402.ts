@@ -6,8 +6,18 @@ import type {
 } from "x402-solana/server";
 import { getDefaultTokenAsset } from "x402-solana/utils";
 import { type Result, ok, err } from "./result.js";
+import { withTimeout } from "./withTimeout.js";
 import { QUOTE_TIMEOUT_SECONDS, type GatewayConfig } from "../config.js";
 import type { RentQuote } from "./pricing.js";
+
+// Facilitator call budgets in milliseconds (every external call gets a
+// timeout, REFERENCE_SECURITY_AUDIT.md 3.5; audit A2). Requirements and verify
+// are single HTTP round-trips. Settle also submits the transfer and waits for
+// on-chain confirmation (seconds on mainnet, longer under congestion), so it
+// gets the same 60s budget as the Nosana calls; a settle timeout flows into
+// the settle_unknown reconciliation path, never a silent replay window.
+const FACILITATOR_CALL_TIMEOUT_MS = 30_000;
+const SETTLE_CALL_TIMEOUT_MS = 60_000;
 
 export const buildX402Handler = (config: GatewayConfig): X402PaymentHandler =>
   new X402PaymentHandler({
@@ -43,15 +53,19 @@ export const buildPaymentRequirementsSafely = async (
   resourceUrl: string,
 ): Promise<Result<PaymentRequirements>> => {
   try {
-    const requirements = await x402Handler.createPaymentRequirements(
-      {
-        amount: quote.amountAtomic,
-        asset: getDefaultTokenAsset(config.x402Network),
-        description: `Nosana GPU rental: ${quote.market.name} for ${quote.durationMinutes} minutes`,
-        mimeType: "application/json",
-        maxTimeoutSeconds: QUOTE_TIMEOUT_SECONDS,
-      },
-      resourceUrl,
+    const requirements = await withTimeout(
+      x402Handler.createPaymentRequirements(
+        {
+          amount: quote.amountAtomic,
+          asset: getDefaultTokenAsset(config.x402Network),
+          description: `Nosana GPU rental: ${quote.market.name} for ${quote.durationMinutes} minutes`,
+          mimeType: "application/json",
+          maxTimeoutSeconds: QUOTE_TIMEOUT_SECONDS,
+        },
+        resourceUrl,
+      ),
+      "createPaymentRequirements",
+      FACILITATOR_CALL_TIMEOUT_MS,
     );
     return ok(requirements);
   } catch (facilitatorError) {
@@ -79,7 +93,13 @@ export const verifyPaymentSafely = async (
   requirements: PaymentRequirements,
 ): Promise<Result<VerifyResponse>> => {
   try {
-    return ok(await x402Handler.verifyPayment(paymentHeader, requirements));
+    return ok(
+      await withTimeout(
+        x402Handler.verifyPayment(paymentHeader, requirements),
+        "verifyPayment",
+        FACILITATOR_CALL_TIMEOUT_MS,
+      ),
+    );
   } catch (verifyTransportError) {
     const message =
       verifyTransportError instanceof Error
@@ -95,7 +115,13 @@ export const settlePaymentSafely = async (
   requirements: PaymentRequirements,
 ): Promise<Result<SettleResponse>> => {
   try {
-    return ok(await x402Handler.settlePayment(paymentHeader, requirements));
+    return ok(
+      await withTimeout(
+        x402Handler.settlePayment(paymentHeader, requirements),
+        "settlePayment",
+        SETTLE_CALL_TIMEOUT_MS,
+      ),
+    );
   } catch (settleTransportError) {
     const message =
       settleTransportError instanceof Error

@@ -10,7 +10,8 @@ import { type Result, ok, err } from "./result.js";
 //   reserved -> settle_rejected  (facilitator explicitly refused: money did NOT move)
 //   settled | provision_failed | settle_unknown -> refunded
 //     (the operator sent the USDC back and recorded the refund tx via the
-//      admin refund route)
+//      admin refund route; a reservation stuck past STALE_RESERVATION_SECONDS
+//      qualifies too, after on-chain reconciliation)
 // A reservation row is only ever DELETED before settle is attempted (a capacity
 // refusal, where no money moved). Once settle is attempted the row is never
 // deleted: deleting it would reopen a replay window where a settle that landed
@@ -33,6 +34,15 @@ export type SettlementStatus =
 // what counts as owed.
 const REFUNDABLE_STATUSES = ["settled", "provision_failed", "settle_unknown"] as const;
 
+// Age in seconds past which a 'reserved' row is suspicious. A reservation
+// lives from reserve to the settle result: at worst the credits check (60s,
+// provisioning.ts) plus settle (60s, x402.ts), about two minutes. One this
+// old means the process died mid-settle, so the settle outcome is unknown and
+// money may have moved even though the row never reached a settled status
+// (audit A3). Surfaced by listStaleReservations for manual on-chain
+// reconciliation; 900s keeps a wide margin over the two-minute worst case.
+export const STALE_RESERVATION_SECONDS = 900;
+
 export interface SettlementRecord {
   readonly paymentKey: string;
   readonly status: SettlementStatus;
@@ -48,10 +58,11 @@ export interface SettlementRecord {
 }
 
 // Why markRefunded failed, so the admin route can answer 404 (no such
-// payment) and 409 (exists but not awaiting a refund) distinctly
-// (REFERENCE_SECURITY_AUDIT.md always-on rule 8).
+// payment) and 409 (exists but not awaiting a refund, or the refund tx is
+// already recorded elsewhere) distinctly (REFERENCE_SECURITY_AUDIT.md
+// always-on rule 8).
 export interface MarkRefundedFailure {
-  readonly code: "not_found" | "not_refundable";
+  readonly code: "not_found" | "not_refundable" | "duplicate_refund_tx";
   readonly message: string;
 }
 
@@ -94,13 +105,18 @@ export interface SettlementStore {
   markProvisioned: (paymentKey: string, deploymentId: string) => void;
   markProvisionFailed: (paymentKey: string, deploymentId: string | null) => void;
   // The operator sent the USDC back: record the refund tx and close the row.
-  // Only valid from a status where money was owed; the payment key stays in
-  // the table so the original header can never be replayed.
+  // Only valid from a status where money was owed (or a stale reservation,
+  // reconciled on-chain first); the payment key stays in the table so the
+  // original header can never be replayed.
   markRefunded: (
     paymentKey: string,
     refundTxSignature: string,
   ) => Result<void, MarkRefundedFailure>;
   listPaidWithoutDeployment: () => SettlementRecord[];
+  // Reservations older than STALE_RESERVATION_SECONDS: the process died
+  // mid-settle, so money MAY have moved without the row ever leaving
+  // 'reserved'. Needs manual on-chain reconciliation (audit A3).
+  listStaleReservations: () => SettlementRecord[];
   summarizeLedger: () => LedgerSummary;
 }
 
@@ -157,6 +173,15 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
   if (!existingColumns.some((column) => column.name === "refund_tx_signature")) {
     database.exec(`ALTER TABLE settlements ADD COLUMN refund_tx_signature TEXT;`);
   }
+  // One refund transfer closes exactly one owed payment: without this, the
+  // same refund tx could be recorded against two rows and hide an unpaid
+  // refund (audit A4). Partial so the NULLs of every non-refunded row do not
+  // collide.
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS settlements_refund_tx_unique
+      ON settlements(refund_tx_signature)
+      WHERE refund_tx_signature IS NOT NULL;
+  `);
 
   const reservePayment: SettlementStore["reservePayment"] = (paymentKey, quoteInfo) => {
     // INSERT OR IGNORE is the atomic check-and-set: a second request carrying
@@ -224,12 +249,16 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
       .run(paymentKey);
   };
 
+  // Both outcome marks step only from 'settled' (the callers settle first,
+  // always); the guard makes a stray call on a refunded or rejected row a
+  // no-op instead of a silent state overwrite (audit A6). A no-op surfaces in
+  // reconciliation rather than corrupting the ledger.
   const markProvisioned: SettlementStore["markProvisioned"] = (paymentKey, deploymentId) => {
     database
       .query(
         `UPDATE settlements
            SET status = 'provisioned', deployment_id = ?2, updated_at = unixepoch()
-         WHERE payment_key = ?1`,
+         WHERE payment_key = ?1 AND status = 'settled'`,
       )
       .run(paymentKey, deploymentId);
   };
@@ -242,7 +271,7 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
       .query(
         `UPDATE settlements
            SET status = 'provision_failed', deployment_id = ?2, updated_at = unixepoch()
-         WHERE payment_key = ?1`,
+         WHERE payment_key = ?1 AND status = 'settled'`,
       )
       .run(paymentKey, deploymentId);
   };
@@ -250,15 +279,39 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
   const markRefunded: SettlementStore["markRefunded"] = (paymentKey, refundTxSignature) => {
     // The WHERE clause is the atomic guard: only a status where money is owed
     // can move to 'refunded', so a double mark (or a mark on a provisioned
-    // rental) changes zero rows and is reported distinctly below.
-    const updateResult = database
-      .query(
-        `UPDATE settlements
-           SET status = 'refunded', refund_tx_signature = ?2, updated_at = unixepoch()
-         WHERE payment_key = ?1
-           AND status IN (${REFUNDABLE_STATUSES.map(() => "?").join(", ")})`,
-      )
-      .run(paymentKey, refundTxSignature, ...REFUNDABLE_STATUSES);
+    // rental) changes zero rows and is reported distinctly below. A stale
+    // reservation qualifies too (the operator reconciled it on-chain, found
+    // the transfer landed, and refunded it); a FRESH reservation never does,
+    // because its settle is still in flight.
+    // Placeholders are numbered throughout: mixing bare "?" with "?N" makes
+    // SQLite continue numbering from the highest explicit index, which
+    // silently collides bindings.
+    const statusPlaceholders = REFUNDABLE_STATUSES.map(
+      (_unusedStatus, statusIndex) => `?${4 + statusIndex}`,
+    ).join(", ");
+    let updateResult: { changes: number };
+    try {
+      updateResult = database
+        .query(
+          `UPDATE settlements
+             SET status = 'refunded', refund_tx_signature = ?2, updated_at = unixepoch()
+           WHERE payment_key = ?1
+             AND (status IN (${statusPlaceholders})
+                  OR (status = 'reserved' AND created_at < unixepoch() - ?3))`,
+        )
+        .run(paymentKey, refundTxSignature, STALE_RESERVATION_SECONDS, ...REFUNDABLE_STATUSES);
+    } catch (uniqueConstraintError) {
+      // The partial unique index on refund_tx_signature caught a refund tx
+      // already recorded for another payment (audit A4).
+      const message =
+        uniqueConstraintError instanceof Error
+          ? uniqueConstraintError.message
+          : String(uniqueConstraintError);
+      return err({
+        code: "duplicate_refund_tx",
+        message: `this refund tx signature is already recorded for another payment: ${message}`,
+      });
+    }
     if (updateResult.changes === 1) {
       return ok(undefined);
     }
@@ -290,6 +343,19 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
           WHERE status IN (${REFUNDABLE_STATUSES.map(() => "?").join(", ")})`,
       )
       .all(...REFUNDABLE_STATUSES) as SettlementRow[];
+    return rows.map(mapRowToRecord);
+  };
+
+  const listStaleReservations: SettlementStore["listStaleReservations"] = () => {
+    const rows = database
+      .query(
+        `SELECT payment_key, status, tx_signature, payer, market_slug,
+                duration_minutes, amount_atomic, deployment_id, refund_tx_signature
+           FROM settlements
+          WHERE status = 'reserved'
+            AND created_at < unixepoch() - ?1`,
+      )
+      .all(STALE_RESERVATION_SECONDS) as SettlementRow[];
     return rows.map(mapRowToRecord);
   };
 
@@ -338,6 +404,7 @@ export const createSettlementStore = (databasePath: string): SettlementStore => 
     markProvisionFailed,
     markRefunded,
     listPaidWithoutDeployment,
+    listStaleReservations,
     summarizeLedger,
   };
 };

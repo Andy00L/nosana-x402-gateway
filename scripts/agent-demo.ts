@@ -29,10 +29,14 @@ const ENDPOINT_RETRY_INTERVAL_MS = 5_000;
 const ENDPOINT_RETRY_TIMEOUT_MS = 90_000;
 
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:3000";
-const AGENT_DURATION_MINUTES = Number.parseInt(
-  process.env.AGENT_DURATION_MINUTES ?? "2",
-  10,
-);
+// Guarded parse: a garbage AGENT_DURATION_MINUTES would otherwise become NaN,
+// serialize to null in the request body, and fail as a confusing gateway 400.
+const DEFAULT_DURATION_MINUTES = 2;
+const parsedDurationMinutes = Number.parseInt(process.env.AGENT_DURATION_MINUTES ?? "", 10);
+const AGENT_DURATION_MINUTES =
+  Number.isInteger(parsedDurationMinutes) && parsedDurationMinutes >= 1
+    ? parsedDurationMinutes
+    : DEFAULT_DURATION_MINUTES;
 
 // The sign-off job serves an HTTP port so the "poll the endpoint" step is
 // testable: nginx on port 80, exposed through Nosana

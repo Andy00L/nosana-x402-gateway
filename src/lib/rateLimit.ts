@@ -2,20 +2,21 @@ import type { Context, MiddlewareHandler } from "hono";
 import { getConnInfo } from "hono/bun";
 import { respondWithJsonError } from "./httpError.js";
 
-// Fixed-window rate limit for the unpaid surface: GET /markets and the 402
-// quote branches of the rent routes. The paid retry is metered by its payment;
-// the unpaid path fans out to the Nosana markets API and the Solana RPC, so
-// without a limit it can be spammed into upstream rate limits (the gap named
-// in the README's honesty section). In-memory by design: the settlement ledger
-// is the only durable state, and a restart resetting rate windows is harmless.
+// Fixed-window rate limit for the public quote and rent surface: GET /markets
+// and POST /rent (with or without a payment header). It applies to paid
+// retries too, on purpose: exempting requests that merely CARRY a payment
+// header would let anyone bypass the limit with a garbage header while still
+// triggering the markets fan-out and two facilitator round-trips per request
+// (audit finding A1). In-memory by design: the settlement ledger is the only
+// durable state, and a restart resetting rate windows is harmless.
 
-// Requests allowed per client per window. Sized for a legitimate agent
-// (discover markets, take a few quotes, retry: tens of requests a minute),
-// not a scraper.
-export const UNPAID_REQUESTS_PER_WINDOW = 60;
+// Requests allowed per client per window. Sized for a legitimate agent: a
+// rental costs 2 requests (quote plus paid retry), so one address can start
+// 30 rentals a minute before throttling.
+const REQUESTS_PER_WINDOW = 60;
 
 // Window length in milliseconds.
-export const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_WINDOW_MS = 60_000;
 
 // Ceiling on tracked clients so the window map cannot grow without bound
 // (REFERENCE_SECURITY_AUDIT.md 3.6). Past it, expired windows are pruned; if
@@ -40,7 +41,7 @@ export interface RateLimiter {
 }
 
 export const createRateLimiter = (
-  maxRequestsPerWindow: number = UNPAID_REQUESTS_PER_WINDOW,
+  maxRequestsPerWindow: number = REQUESTS_PER_WINDOW,
   windowMs: number = RATE_LIMIT_WINDOW_MS,
 ): RateLimiter => {
   const windowsByClient = new Map<string, RateWindow>();
@@ -84,7 +85,7 @@ export const createRateLimiter = (
 // proxy, so TRUST_PROXY=1 switches to the first x-forwarded-for entry instead;
 // trusting that header WITHOUT a proxy would let any client mint a fresh
 // bucket per request, which is why it is opt-in (config.trustProxy).
-export const resolveClientKey = (context: Context, trustProxy: boolean): string => {
+const resolveClientKey = (context: Context, trustProxy: boolean): string => {
   if (trustProxy) {
     const forwardedFor = context.req.header("x-forwarded-for");
     const firstHop = forwardedFor?.split(",")[0]?.trim();
@@ -104,9 +105,9 @@ export const resolveClientKey = (context: Context, trustProxy: boolean): string 
 };
 
 // Returns the 429 response to send, or null when the request is allowed.
-// Kept as a plain function (not only middleware) so the rent routes can apply
-// it to their unpaid quote branch only, after they have seen the payment header.
-export const enforceUnpaidRateLimit = (
+// Kept as a plain function (not only middleware) so the rent routes can call
+// it inline at the top of their handlers.
+export const enforceRateLimit = (
   context: Context,
   limiter: RateLimiter,
   trustProxy: boolean,
@@ -119,16 +120,16 @@ export const enforceUnpaidRateLimit = (
   return respondWithJsonError(
     context,
     429,
-    `too many unpaid requests from this address: retry in ${decision.retryAfterSeconds}s`,
+    `too many requests from this address: retry in ${decision.retryAfterSeconds}s`,
   );
 };
 
-export const createUnpaidRateLimitMiddleware = (
+export const createRateLimitMiddleware = (
   limiter: RateLimiter,
   trustProxy: boolean,
 ): MiddlewareHandler => {
   return async (context, next) => {
-    const rateRefusal = enforceUnpaidRateLimit(context, limiter, trustProxy);
+    const rateRefusal = enforceRateLimit(context, limiter, trustProxy);
     if (rateRefusal) {
       return rateRefusal;
     }

@@ -13,7 +13,9 @@ const QUOTE_INFO = {
 describe("reportRefundsOwed", () => {
   test("returns nothing on a clean ledger", () => {
     const store = createSettlementStore(IN_MEMORY_DB);
-    expect(reportRefundsOwed(store)).toHaveLength(0);
+    const report = reportRefundsOwed(store);
+    expect(report.refundsOwed).toHaveLength(0);
+    expect(report.staleReservations).toHaveLength(0);
   });
 
   test("returns every payment that settled without a deployment", () => {
@@ -26,8 +28,10 @@ describe("reportRefundsOwed", () => {
     store.markSettled("ok-1", "tx-ok-1", "payer-2");
     store.markProvisioned("ok-1", "dep-1");
 
-    const reported = reportRefundsOwed(store);
-    expect(reported).toHaveLength(1);
-    expect(reported[0]?.txSignature).toBe("tx-fail-1");
+    const report = reportRefundsOwed(store);
+    expect(report.refundsOwed).toHaveLength(1);
+    expect(report.refundsOwed[0]?.txSignature).toBe("tx-fail-1");
+    // A fresh reservation is normal in-flight state, never reported stale.
+    expect(report.staleReservations).toHaveLength(0);
   });
 });

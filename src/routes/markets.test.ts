@@ -4,7 +4,7 @@ import type { MarketsService, GatewayMarket } from "../lib/markets.js";
 import type { AvailabilityService, MarketAvailability } from "../lib/availability.js";
 import {
   createRateLimiter,
-  createUnpaidRateLimitMiddleware,
+  createRateLimitMiddleware,
 } from "../lib/rateLimit.js";
 import { ok, err, type Result } from "../lib/result.js";
 
@@ -13,7 +13,7 @@ import { ok, err, type Result } from "../lib/result.js";
 // server every request shares the "unknown" client key, which is exactly what
 // the exhaustion test below relies on.
 const buildPermissiveRateLimit = () =>
-  createUnpaidRateLimitMiddleware(createRateLimiter(), false);
+  createRateLimitMiddleware(createRateLimiter(), false);
 
 const marketWithHosts: GatewayMarket = {
   address: "9MGKqixvtLJgL46Bp38ZrD3MxTMRt57VL3rQtQY64zj4",
@@ -107,13 +107,13 @@ describe("createMarketsRouter", () => {
     const router = createMarketsRouter(
       marketsService,
       availabilityService,
-      createUnpaidRateLimitMiddleware(createRateLimiter(1), false),
+      createRateLimitMiddleware(createRateLimiter(1), false),
     );
     expect((await router.request("/")).status).toBe(200);
     const refused = await router.request("/");
     expect(refused.status).toBe(429);
     expect(Number(refused.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
     const body = (await refused.json()) as { error: string };
-    expect(body.error).toContain("too many unpaid requests");
+    expect(body.error).toContain("too many requests");
   });
 });

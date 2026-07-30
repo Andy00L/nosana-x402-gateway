@@ -10,7 +10,7 @@ import { createAvailabilityService, type MarketQueueSource } from "./lib/availab
 import { buildServiceDescription } from "./lib/agentGuide.js";
 import {
   createRateLimiter,
-  createUnpaidRateLimitMiddleware,
+  createRateLimitMiddleware,
 } from "./lib/rateLimit.js";
 import { reportRefundsOwed } from "./lib/refundScan.js";
 import { ok, err } from "./lib/result.js";
@@ -98,10 +98,10 @@ app.use(
   }),
 );
 
-// One shared budget for the whole unpaid surface (GET /markets and the 402
-// quote branches): a scraper alternating between the two paths cannot double
-// its allowance.
-const unpaidRateLimiter = createRateLimiter();
+// One shared budget for the whole public quote and rent surface (GET /markets
+// and every POST /rent, paid or not): a scraper alternating between paths
+// cannot double its allowance, and a garbage payment header buys no exemption.
+const publicRateLimiter = createRateLimiter();
 
 // Root discovery: the whole x402 rent flow on one page, so an agent can orient
 // (headers, ordered steps, every endpoint) before it makes any request.
@@ -112,7 +112,7 @@ app.route(
   createMarketsRouter(
     marketsService,
     availabilityService,
-    createUnpaidRateLimitMiddleware(unpaidRateLimiter, config.trustProxy),
+    createRateLimitMiddleware(publicRateLimiter, config.trustProxy),
   ),
 );
 app.route(
@@ -124,7 +124,7 @@ app.route(
     x402Handler,
     settlementStore,
     provisioningService,
-    unpaidRateLimiter,
+    publicRateLimiter,
   }),
 );
 app.route(
@@ -137,14 +137,16 @@ console.log(
 );
 
 // Connection idle ceiling in seconds. Bun.serve defaults to 10s and kills any
-// connection with no bytes moving, which the paid path can legitimately exceed:
-// it chains facilitator verify + settle and Nosana pin + create, each Nosana
-// call budgeted at 60s (provisioning.ts NOSANA_CALL_TIMEOUT_MS). A connection
-// cut after settle loses the agent's receipt (deployment id, session, refund
-// tx), observed once in the 2026-07-08 mainnet sign-off log
-// (docs/evidence/2026-07-08-mainnet-signoff.txt). 180s covers two chained
-// 60s budgets plus facilitator round-trips; Bun caps the setting at 255.
-const CONNECTION_IDLE_TIMEOUT_SECONDS = 180;
+// connection with no bytes moving, which the paid path can legitimately exceed
+// (no byte leaves until the receipt is ready). A connection cut after settle
+// loses the agent's receipt (deployment id, session, refund tx), observed once
+// in the 2026-07-08 mainnet sign-off log
+// (docs/evidence/2026-07-08-mainnet-signoff.txt). Worst-case paid chain with
+// every call at its budget: requirements 30 + verify 30 (x402.ts
+// FACILITATOR_CALL_TIMEOUT_MS) + settle 60 (SETTLE_CALL_TIMEOUT_MS) + pin 60 +
+// create 60 (provisioning.ts NOSANA_CALL_TIMEOUT_MS) = 240s. Bun caps the
+// setting at 255, so 250 is the margin that fits.
+const CONNECTION_IDLE_TIMEOUT_SECONDS = 250;
 
 export default {
   port: config.port,

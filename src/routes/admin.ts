@@ -100,7 +100,7 @@ interface AdminRouterDependencies {
   readonly config: Pick<GatewayConfig, "adminToken" | "x402Network">;
   readonly settlementStore: Pick<
     SettlementStore,
-    "summarizeLedger" | "listPaidWithoutDeployment" | "markRefunded"
+    "summarizeLedger" | "listPaidWithoutDeployment" | "listStaleReservations" | "markRefunded"
   >;
   readonly creditsSource: Pick<ProvisioningService, "getCreditsBalance">;
 }
@@ -154,7 +154,9 @@ export const createAdminRouter = (dependencies: AdminRouterDependencies): Hono =
     });
   });
 
-  // Every refund owed, each with a ready-to-run spl-token transfer command.
+  // Every refund owed, each with a ready-to-run spl-token transfer command,
+  // plus any reservation stuck mid-settle (money may have moved with no
+  // record of it; audit A3).
   adminRouter.get("/refunds", (context) => {
     const authFailure = findAdminAuthFailure(context);
     if (authFailure) {
@@ -174,7 +176,14 @@ export const createAdminRouter = (dependencies: AdminRouterDependencies): Hono =
       deployment_id: record.deploymentId,
       refund_command: buildRefundCommand(usdcMintAddress, record),
     }));
-    return context.json({ refunds, how_to: REFUNDS_HOW_TO });
+    const staleReservations = settlementStore.listStaleReservations().map((record) => ({
+      payment_key: record.paymentKey,
+      market_slug: record.marketSlug,
+      amount_atomic: record.amountAtomic,
+      amount_usd: fromAtomicUnits(record.amountAtomic, USDC_DECIMALS),
+      note: "reservation stuck mid-settle: check the treasury on-chain for a transfer of this amount; if it landed, refund the sender and record it here",
+    }));
+    return context.json({ refunds, stale_reservations: staleReservations, how_to: REFUNDS_HOW_TO });
   });
 
   // Close a refund row after the operator's transfer landed on chain.

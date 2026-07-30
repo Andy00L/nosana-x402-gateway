@@ -124,10 +124,13 @@ describe("admin refunds", () => {
         amount_atomic: string;
         refund_command: string | null;
       }>;
+      stale_reservations: unknown[];
       how_to: string;
     };
-    // Only the provision_failed record is owed; the provisioned one is not.
+    // Only the provision_failed record is owed; the provisioned one is not,
+    // and no reservation in this ledger is old enough to be stale.
     expect(body.refunds).toHaveLength(1);
+    expect(body.stale_reservations).toHaveLength(0);
     const owed = body.refunds[0];
     expect(owed?.payment_key).toBe("fail-1");
     // 10000 atomic at 6 decimals is exactly 0.01 USDC, string-formatted.

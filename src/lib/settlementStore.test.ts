@@ -151,6 +151,36 @@ describe("markRefunded", () => {
     }
   });
 
+  test("refuses the same refund tx against a second owed payment", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    store.reservePayment("key-1", QUOTE_INFO);
+    store.markSettled("key-1", "tx-sig-1", "payer-1");
+    store.markProvisionFailed("key-1", null);
+    store.reservePayment("key-2", QUOTE_INFO);
+    store.markSettled("key-2", "tx-sig-2", "payer-2");
+    store.markProvisionFailed("key-2", null);
+
+    expect(store.markRefunded("key-1", REFUND_TX).ok).toBe(true);
+    // One transfer cannot close two owed rows (audit A4): the second row
+    // must stay owed instead of silently sharing the first row's refund.
+    const duplicate = store.markRefunded("key-2", REFUND_TX);
+    expect(duplicate.ok).toBe(false);
+    if (!duplicate.ok) {
+      expect(duplicate.reason.code).toBe("duplicate_refund_tx");
+    }
+    expect(store.listPaidWithoutDeployment()).toHaveLength(1);
+  });
+
+  test("a fresh reservation cannot be marked refunded (settle may be in flight)", () => {
+    const store = createSettlementStore(IN_MEMORY_DB);
+    store.reservePayment("key-1", QUOTE_INFO);
+    const refused = store.markRefunded("key-1", REFUND_TX);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.reason.code).toBe("not_refundable");
+    }
+  });
+
   test("refuses a provisioned rental and a double mark as not_refundable", () => {
     const store = createSettlementStore(IN_MEMORY_DB);
     store.reservePayment("key-1", QUOTE_INFO);
@@ -171,6 +201,39 @@ describe("markRefunded", () => {
     expect(doubleMark.ok).toBe(false);
     if (!doubleMark.ok) {
       expect(doubleMark.reason.code).toBe("not_refundable");
+    }
+  });
+
+  test("surfaces a reservation stuck mid-settle and lets it close after reconciliation", () => {
+    const STALE_DB_PATH = ".scratch/settlement-stale-test.db";
+    mkdirSync(".scratch", { recursive: true });
+    rmSync(STALE_DB_PATH, { force: true });
+    try {
+      const store = createSettlementStore(STALE_DB_PATH);
+      store.reservePayment("stale-1", QUOTE_INFO);
+      store.reservePayment("fresh-1", QUOTE_INFO);
+      // Backdate one reservation past the stale threshold, as if the process
+      // had died mid-settle an hour ago.
+      const rawDatabase = new Database(STALE_DB_PATH);
+      rawDatabase
+        .query(
+          `UPDATE settlements SET created_at = created_at - 3600 WHERE payment_key = 'stale-1'`,
+        )
+        .run();
+      rawDatabase.close();
+
+      const staleReservations = store.listStaleReservations();
+      expect(staleReservations).toHaveLength(1);
+      expect(staleReservations[0]?.paymentKey).toBe("stale-1");
+      // After reconciling on-chain, the operator can close the stale row as
+      // refunded; the fresh one stays untouchable (settle may be in flight).
+      expect(store.markRefunded("stale-1", REFUND_TX).ok).toBe(true);
+      expect(store.listStaleReservations()).toHaveLength(0);
+      expect(store.markRefunded("fresh-1", "another-refund-tx").ok).toBe(false);
+    } finally {
+      rmSync(STALE_DB_PATH, { force: true });
+      rmSync(`${STALE_DB_PATH}-wal`, { force: true });
+      rmSync(`${STALE_DB_PATH}-shm`, { force: true });
     }
   });
 
