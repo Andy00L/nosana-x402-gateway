@@ -123,10 +123,18 @@ The diagram above is the topology; this is the exact x402 handshake.
 
 ```mermaid
 sequenceDiagram
-    participant Agent as AI agent
-    participant GW as nosana-x402-gateway
-    participant Fac as PayAI facilitator
-    participant Nos as Nosana credits API
+    box rgba(154, 91, 19, 0.14) Paying agent
+        participant Agent as AI agent
+    end
+    box rgba(107, 79, 166, 0.16) This gateway
+        participant GW as nosana-x402-gateway
+    end
+    box rgba(115, 110, 100, 0.14) Solana settlement
+        participant Fac as PayAI facilitator
+    end
+    box rgba(37, 112, 79, 0.14) Existing Nosana
+        participant Nos as Nosana credits API
+    end
 
     Agent->>GW: POST /rent (market, minutes, job definition)
     GW->>Nos: read live market rate and on-chain queue
@@ -142,6 +150,10 @@ sequenceDiagram
     Nos-->>GW: job address (QUEUED, a host picks it up)
     GW-->>Agent: 200 (deployment id, session JWT, tx signature)
 ```
+
+Amber, the agent holding the USDC; violet, this gateway (the one new piece);
+neutral, settlement on Solana through the facilitator; green, Nosana's existing
+credits rail, untouched. Same color story as the architecture diagram above.
 
 The sequence above is the order; this is every field that crosses the wire, from
 the first request to the receipt:
@@ -168,6 +180,44 @@ transport failure returns 502, distinct from a payment rejection (402). A
 replayed header, or a second header carrying an already-settled tx, stops at 409
 before any fulfillment. A gateway with no API key refuses every payment with 503
 before verify, so money never moves toward capacity that is not there.
+
+### Every payment ends in exactly one ledger state
+
+The SQLite ledger drives all of the above: each payment key walks this machine
+once, and the colored states are the only places it can stop. See
+[src/lib/settlementStore.ts](src/lib/settlementStore.ts).
+
+```mermaid
+flowchart TD
+    verify["facilitator verify"] -->|"invalid"| refused["402 refused"]
+    verify -->|"valid"| reserve["reserve payment key"]
+    reserve -->|"key already seen"| replay["409 replay blocked"]
+    reserve -->|"reserved"| capacity["credits cover the job?"]
+    capacity -->|"no: reservation released"| capacityRefused["503 refused"]
+    capacity -->|"yes"| settle["settle: USDC moves on Solana"]
+    settle -->|"facilitator refused"| rejected["settle_rejected"]
+    settle -->|"transport error or timeout"| unknown["settle_unknown: maybe owed"]
+    settle -->|"tx signature"| provision["pin to IPFS, post jobs.list"]
+    provision -->|"create failed"| owed["provision_failed: refund owed"]
+    provision -->|"job posted"| provisioned["provisioned: GPU delivered"]
+    owed -->|"operator sends the USDC back"| refunded["refunded: tx recorded"]
+    unknown -->|"reconciled on chain"| refunded
+
+    classDef noMoney fill:#efece3,stroke:#736e64,color:#1c1917
+    classDef moneyHeld fill:#f6ead6,stroke:#9a5b13,color:#1c1917
+    classDef delivered fill:#e3efe8,stroke:#25704f,color:#1c1917
+    classDef returned fill:#ebe6f4,stroke:#6b4fa6,color:#1c1917
+    class refused,replay,capacityRefused,rejected noMoney
+    class unknown,owed moneyHeld
+    class provisioned delivered
+    class refunded returned
+```
+
+Neutral, no money moved; amber, money held and owed back; green, compute
+delivered; violet, money returned. The admin ledger proves the identity
+`usdc_in = credits_spent + custodial_float + refunded` to the atomic unit, and a
+reservation stuck mid-settle past 15 minutes is flagged for on-chain
+reconciliation instead of being forgotten.
 
 ### API surface
 
