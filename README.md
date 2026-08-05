@@ -78,6 +78,12 @@ stack.
   explains the challenge and names the header to resend, and each rent receipt
   carries a `next` block. An agent orients from the responses, not the source.
   See [src/lib/agentGuide.ts](src/lib/agentGuide.ts).
+- **An agent skill for the credits rail.** [skills/nosana-deploy](skills/nosana-deploy/SKILL.md)
+  teaches an AI agent to drive Nosana's credits REST API directly with its own
+  `nos_` key: verified premium market addresses, the four gotchas that each cost
+  a wasted paid run, and a stdlib-only Python driver. Nosana publishes no
+  official skill file today; this one fills the gap for operators, while the
+  gateway itself stays the keyless, pay-per-job path.
 - **Server-side pricing.** The quote is `usd_reward_per_hour` from the live
   markets API, prorated per minute in integer micro-USD (BigInt ceiling
   division, no floating point on money). Client-supplied prices do not exist.
@@ -337,6 +343,9 @@ src/
                  and refund tooling
   *.test.ts      unit tests colocated with the modules they cover
 scripts/         agent-demo.ts, the mock x402 agent for the mainnet sign-off
+skills/
+  nosana-deploy/ agent skill for Nosana's credits REST API (SKILL.md plus a
+                 stdlib-only Python driver); needs a nos_ key, unlike the gateway
 docs/
   INTEGRATION.md what adopting this natively takes, path by path
   assets/        the icon, the architecture diagram, the payment schema
